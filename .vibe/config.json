@@ -1,0 +1,36 @@
+{
+  "version": "1.0.0",
+  "project": {
+    "name": "NYC RE Tracker",
+    "repository": "NYC-re-tracker"
+  },
+  "tracker": {
+    "type": "linear",
+    "config": {
+      "team_id": "34caafd0-0520-4c3b-86bb-eb9fe0c1839d",
+      "workspace": "test-project-mw",
+      "github_integration": "native"
+    }
+  },
+  "github": {
+    "auth_method": "gh_cli",
+    "owner": "mwarden78",
+    "repo": "NYC-re-tracker"
+  },
+  "branching": {
+    "pattern": "{PROJ}-{num}",
+    "main_branch": "main",
+    "always_rebase": true
+  },
+  "worktrees": {
+    "location": "sibling",
+    "base_path": "../NYC-re-tracker-worktrees",
+    "auto_cleanup": true
+  },
+  "labels": {
+    "type": ["Bug", "Feature", "Chore", "Refactor"],
+    "risk": ["Low Risk", "Medium Risk", "High Risk"],
+    "area": ["Frontend", "Backend", "Infra", "Docs"],
+    "special": ["HUMAN", "Milestone", "Blocked"]
+  }
+}
