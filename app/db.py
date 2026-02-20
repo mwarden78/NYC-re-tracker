@@ -47,6 +47,13 @@ def load_deals() -> list[dict]:
     return result.data or []
 
 
+def add_to_pipeline(property_id: str, status: str = "watching") -> None:
+    """Insert a deal record and clear the cache so the UI refreshes."""
+    client = get_client()
+    client.table("deals").insert({"property_id": property_id, "status": status}).execute()
+    st.cache_data.clear()
+
+
 @st.cache_data(ttl=_TTL)
 def load_summary() -> dict:
     """Return aggregate counts for the home page dashboard."""
