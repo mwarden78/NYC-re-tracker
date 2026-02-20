@@ -8,12 +8,79 @@ This file contains instructions for AI agents (Claude, GPT, etc.) working on pro
 
 ## Project Overview
 
-**Fill this in after applying the boilerplate** so AI agents have immediate context on what the project is. Run `bin/vibe setup` when ready; consider updating this section as part of that flow.
+- **What this project does:** A NYC-specific residential real estate deal tracker for value-add investors. Ingests foreclosure and tax lien data from NYC Open Data, displays deals as filterable property cards, maps them geographically, and tracks them through a personal investment pipeline.
+- **Tech stack:** Python, Streamlit (app/frontend), Supabase (PostgreSQL), pydeck (maps), NYC Open Data API, Streamlit Community Cloud (deployment)
+- **Primary user (v1):** A single NYC real estate investor focused on value-add, distressed/foreclosure, and assemblage opportunities
+- **Key features:** Deal discovery feed, filters, map view, pipeline tracking (Watching → Analyzing → Offer Made → Dead), manual deal entry
+- **Specs or docs:** `docs/nyc-real-estate-competitive-analysis.md`
 
-- **What this project does:** *Dashboard / App that tracks potential real estate deals coming into NYC. Dashboard should include a map functionality showing addresses / locations of deals on the market. Real Estate tracker should include functionality to analyse deals based on publicly available information and zoning laws*
-- **Tech stack:** * backend: Django; frontend: React; database: PostgreSQL; deployment: Fly.io*
-- **Key features / domains:** *(e.g. auth, reporting, webhooks)*
-- **Specs or docs:** *(link to ADRs, product spec, or "None yet" if they don't exist)*
+---
+
+## Project Status & Ticket Tracker
+
+**Linear team:** TES (Test Project MW)
+**Team ID:** `34caafd0-0520-4c3b-86bb-eb9fe0c1839d`
+**GitHub:** mwarden78/NYC-re-tracker
+
+| Ticket | Title | Status |
+|--------|-------|--------|
+| TES-5 | Initialize Python project structure | ✅ Done |
+| TES-6 | Set up Supabase database schema | ✅ Done |
+| TES-7 | NYC Open Data ingestion script | 🔲 Next |
+| TES-8 | Streamlit app shell and navigation | 🔲 Todo |
+| TES-9 | Deal feed view with property cards | 🔲 Todo |
+| TES-10 | Filter panel for deal feed | 🔲 Todo |
+| TES-11 | Map view with property pins | 🔲 Todo |
+| TES-12 | Deal pipeline tracking view | 🔲 Todo |
+| TES-13 | Manual deal entry form | 🔲 Todo |
+| TES-14 | Deploy to Streamlit Community Cloud | 🔲 Todo |
+
+**Next ticket: TES-7** — NYC Open Data ingestion script
+
+---
+
+## Project Structure
+
+```
+app/
+  main.py                    # Streamlit entry point — run with: .venv/bin/streamlit run app/main.py
+data/
+  schema.sql                 # Supabase schema (already applied)
+  ingest_nyc_open_data.py    # NYC Open Data ingestion (TES-7)
+utils/
+  config.py                  # Env var loading
+  supabase_client.py         # Cached Supabase client
+requirements.txt             # Python deps — install with: pip install -r requirements.txt
+.env                         # Local secrets (gitignored) — needs SUPABASE_URL + SUPABASE_KEY
+```
+
+## Database Schema (Supabase)
+
+Two tables already created:
+- **properties** — address, borough, property_type, deal_type (foreclosure/tax_lien/listing/off_market), price, sqft, lat, lng, source
+- **deals** — property_id (FK), status (watching/analyzing/offer_made/dead), notes
+
+3 sample properties seeded for testing (Brooklyn, Queens, Bronx).
+
+## Running the App
+
+```bash
+.venv/bin/streamlit run app/main.py
+```
+
+## Key Decisions
+
+1. **Streamlit over Next.js** — speed. 1-week mockup. Can migrate later.
+2. **NYC Open Data first** — free, legal. PropertyShark deferred.
+3. **No AI zoning in v1** — deferred until usage data is collected.
+4. **Supabase free tier** — sufficient for v1 single-user.
+
+## Important: Loading .env for bin/ticket
+
+`bin/ticket` doesn't auto-load `.env`. Source it manually:
+```bash
+set -a && source .env && set +a && bash bin/ticket list
+```
 
 ---
 
