@@ -1,4 +1,4 @@
-"""Deal Feed — filterable list of property cards (TES-9)."""
+"""Deal Feed — filterable list of property cards (TES-9/TES-10)."""
 
 from __future__ import annotations
 
@@ -13,38 +13,128 @@ st.title("Deal Feed")
 st.caption("Browse foreclosure and tax lien properties")
 
 # ---------------------------------------------------------------------------
-# Sidebar filters
+# Load all data up front so filter ranges reflect the full dataset
 # ---------------------------------------------------------------------------
-with st.sidebar:
-    st.header("Filters")
-
-    BOROUGHS = ["All", "Brooklyn", "Queens", "Manhattan", "Bronx", "Staten Island"]
-    borough_sel = st.selectbox("Borough", BOROUGHS)
-
-    DEAL_TYPES = {
-        "All": None,
-        "Foreclosure": "foreclosure",
-        "Tax Lien": "tax_lien",
-        "Listing": "listing",
-        "Off Market": "off_market",
-    }
-    deal_type_sel = st.selectbox("Deal Type", list(DEAL_TYPES.keys()))
-
-# ---------------------------------------------------------------------------
-# Load data
-# ---------------------------------------------------------------------------
-borough_filter = None if borough_sel == "All" else borough_sel
-deal_type_filter = DEAL_TYPES[deal_type_sel]
-
 try:
-    properties = load_properties(borough=borough_filter, deal_type=deal_type_filter)
+    all_properties = load_properties()
     deals = load_deals()
 except Exception as e:
     st.error(f"Could not load data from Supabase. Check your `.env` file. ({e})")
     st.stop()
 
-# Map property_id → pipeline status for quick lookup
 tracked: dict[str, str] = {d["property_id"]: d["status"] for d in deals}
+
+# ---------------------------------------------------------------------------
+# Sidebar filter panel
+# ---------------------------------------------------------------------------
+with st.sidebar:
+    st.header("Filters")
+
+    # Borough — multiselect
+    BOROUGHS = ["Brooklyn", "Queens", "Manhattan", "Bronx", "Staten Island"]
+    borough_sel = st.multiselect("Borough", BOROUGHS, placeholder="All boroughs")
+
+    # Deal type — multiselect
+    DEAL_TYPE_OPTIONS = {
+        "Foreclosure": "foreclosure",
+        "Tax Lien": "tax_lien",
+        "Listing": "listing",
+        "Off Market": "off_market",
+    }
+    deal_type_sel = st.multiselect(
+        "Deal Type", list(DEAL_TYPE_OPTIONS.keys()), placeholder="All types"
+    )
+
+    # Property type — multiselect
+    PROP_TYPE_OPTIONS = {
+        "1-4 Family": "1-4 family",
+        "Multifamily": "multifamily",
+        "Condo": "condo",
+        "Co-op": "co-op",
+        "Townhouse": "townhouse",
+        "Land": "land",
+    }
+    prop_type_sel = st.multiselect(
+        "Property Type", list(PROP_TYPE_OPTIONS.keys()), placeholder="All types"
+    )
+
+    st.divider()
+
+    # Price range slider — derived from actual data
+    prices = [p["price"] for p in all_properties if p.get("price")]
+    if prices:
+        price_min_data = int(min(prices))
+        price_max_data = int(max(prices))
+        price_range = st.slider(
+            "Price Range",
+            min_value=price_min_data,
+            max_value=price_max_data,
+            value=(price_min_data, price_max_data),
+            step=10_000,
+            format="$%d",
+        )
+    else:
+        price_range = None
+
+    # Min bedrooms
+    min_beds = st.selectbox("Min Bedrooms", ["Any", "1+", "2+", "3+", "4+", "5+"])
+
+    st.divider()
+
+    # Sort
+    SORT_OPTIONS = {
+        "Newest first": ("listed_at", True),
+        "Price: low to high": ("price", False),
+        "Price: high to low": ("price", True),
+    }
+    sort_sel = st.selectbox("Sort By", list(SORT_OPTIONS.keys()))
+
+    # Hide tracked
+    hide_tracked = st.checkbox("Hide tracked properties", value=False)
+
+    # Reset button
+    if st.button("Reset Filters", use_container_width=True):
+        st.rerun()
+
+# ---------------------------------------------------------------------------
+# Apply filters client-side
+# ---------------------------------------------------------------------------
+deal_type_values = {DEAL_TYPE_OPTIONS[k] for k in deal_type_sel}
+prop_type_values = {PROP_TYPE_OPTIONS[k] for k in prop_type_sel}
+min_beds_num = int(min_beds[0]) if min_beds != "Any" else 0
+
+filtered = []
+for p in all_properties:
+    if borough_sel and p.get("borough") not in borough_sel:
+        continue
+    if deal_type_values and p.get("deal_type") not in deal_type_values:
+        continue
+    if prop_type_values and p.get("property_type") not in prop_type_values:
+        continue
+    if price_range:
+        price = p.get("price")
+        if price is not None and not (price_range[0] <= price <= price_range[1]):
+            continue
+    if min_beds_num > 0:
+        beds = p.get("bedrooms")
+        if beds is None or int(beds) < min_beds_num:
+            continue
+    if hide_tracked and p["id"] in tracked:
+        continue
+    filtered.append(p)
+
+# Sort
+sort_key, sort_desc = SORT_OPTIONS[sort_sel]
+
+
+def _sort_val(p: dict):
+    v = p.get(sort_key)
+    if v is None:
+        return (1, 0)  # push nulls to end
+    return (0, v)
+
+
+filtered.sort(key=_sort_val, reverse=sort_desc)
 
 # ---------------------------------------------------------------------------
 # Display helpers
@@ -90,6 +180,7 @@ def _render_card(prop: dict) -> None:
     sqft = prop.get("sqft")
     beds = prop.get("bedrooms")
     baths = prop.get("bathrooms")
+    prop_type = prop.get("property_type", "")
     days = _days_ago(prop.get("listed_at"))
     pipeline_status = tracked.get(prop_id)
 
@@ -102,6 +193,8 @@ def _render_card(prop: dict) -> None:
         )
 
         st.markdown(f"**{address}**")
+        if prop_type:
+            st.caption(prop_type.title())
 
         if price:
             st.markdown(f"### ${price:,.0f}")
@@ -137,15 +230,24 @@ def _render_card(prop: dict) -> None:
 # ---------------------------------------------------------------------------
 # Property grid
 # ---------------------------------------------------------------------------
-if not properties:
+total = len(all_properties)
+shown = len(filtered)
+
+if total == 0:
     st.info(
         "No properties found. "
-        "Run `python data/ingest_nyc_open_data.py` to populate, or adjust filters."
+        "Run `python data/ingest_nyc_open_data.py` to populate."
     )
+elif shown == 0:
+    st.warning("No properties match your current filters.")
+    st.caption(f"0 of {total} properties shown")
 else:
-    st.caption(f"{len(properties)} propert{'y' if len(properties) == 1 else 'ies'}")
+    label = f"{shown} propert{'y' if shown == 1 else 'ies'}"
+    if shown < total:
+        label += f" (filtered from {total})"
+    st.caption(label)
 
     cols = st.columns(3)
-    for i, prop in enumerate(properties):
+    for i, prop in enumerate(filtered):
         with cols[i % 3]:
             _render_card(prop)
