@@ -54,6 +54,13 @@ def add_to_pipeline(property_id: str, status: str = "watching") -> None:
     st.cache_data.clear()
 
 
+def update_deal_status(deal_id: str, new_status: str) -> None:
+    """Update a deal's pipeline status and clear the cache."""
+    client = get_client()
+    client.table("deals").update({"status": new_status}).eq("id", deal_id).execute()
+    st.cache_data.clear()
+
+
 @st.cache_data(ttl=_TTL)
 def load_summary() -> dict:
     """Return aggregate counts for the home page dashboard."""
