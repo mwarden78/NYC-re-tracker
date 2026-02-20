@@ -26,16 +26,16 @@ This file contains instructions for AI agents (Claude, GPT, etc.) working on pro
 |--------|-------|--------|
 | TES-5 | Initialize Python project structure | ✅ Done |
 | TES-6 | Set up Supabase database schema | ✅ Done |
-| TES-7 | NYC Open Data ingestion script | 🔲 Next |
-| TES-8 | Streamlit app shell and navigation | 🔲 Todo |
-| TES-9 | Deal feed view with property cards | 🔲 Todo |
+| TES-7 | NYC Open Data ingestion script | ✅ Done |
+| TES-8 | Streamlit app shell and navigation | 🔁 In Review |
+| TES-9 | Deal feed view with property cards | 🔲 Next |
 | TES-10 | Filter panel for deal feed | 🔲 Todo |
 | TES-11 | Map view with property pins | 🔲 Todo |
 | TES-12 | Deal pipeline tracking view | 🔲 Todo |
 | TES-13 | Manual deal entry form | 🔲 Todo |
 | TES-14 | Deploy to Streamlit Community Cloud | 🔲 Todo |
 
-**Next ticket: TES-7** — NYC Open Data ingestion script
+**Next ticket: TES-9** — Deal feed view with property cards
 
 ---
 
@@ -582,6 +582,16 @@ Update ticket status as work progresses:
 
 When asked to "find unblocked tickets" or "look for work to do", follow this systematic triage process:
 
+#### Step 0: Check open GitHub PRs
+
+**Always do this first.** A ticket may have an open PR even if it's not marked "In Progress" in the tracker.
+
+```bash
+gh pr list --repo <owner>/<repo>
+```
+
+Any ticket with an open PR is effectively **In Progress** (in review). Do not start work on it or mark it as next — treat it as blocked until the PR is merged or closed.
+
 #### Step 1: Filter for candidates
 
 ```bash
@@ -590,6 +600,7 @@ bin/ticket list --status "Todo,Backlog"
 
 Exclude tickets that are:
 - Already **Done**, **Deployed**, **Canceled**, or **In Progress**
+- Have an open PR (from Step 0)
 - Labeled **HUMAN** (requires human action)
 - Blocked by other tickets (check `blockedBy` relationships)
 

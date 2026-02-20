@@ -1,14 +1,14 @@
 """NYC Open Data ingestion script — TES-7.
 
-Fetches foreclosure (lis pendens) and tax lien data from NYC Open Data
+Fetches foreclosure judgment and tax lien data from NYC Open Data
 (Socrata SODA API) and upserts into the Supabase `properties` table.
 
 Data sources:
-  Foreclosures — ACRIS Lis Pendens
-    Master:  https://data.cityofnewyork.us/resource/bnx9-e6tj.json  (doc_type=LP)
+  Foreclosures — ACRIS Real Property Master (doc_type=JUDG)
+    Master:  https://data.cityofnewyork.us/resource/bnx9-e6tj.json
     Legals:  https://data.cityofnewyork.us/resource/8h5j-fqxa.json  (addresses)
-  Tax Liens — DOF Tax Lien Sale List
-    https://data.cityofnewyork.us/resource/9rrd-3h26.json
+  Tax Liens — DOF Tax Lien Sale Lists
+    https://data.cityofnewyork.us/resource/9rz4-mjek.json
 
 No API key is required for read-only Socrata access (up to 1,000 rows/page).
 Set NYC_OPEN_DATA_APP_TOKEN in .env for higher rate limits.
@@ -57,8 +57,8 @@ REQUEST_TIMEOUT = 30  # seconds
 ACRIS_MASTER_ID = "bnx9-e6tj"   # Real Property Master (doc_type, dates, amounts)
 ACRIS_LEGALS_ID = "8h5j-fqxa"  # Real Property Legals (block/lot/address)
 
-# DOF Tax Lien Sale dataset ID
-TAX_LIEN_DATASET_ID = "9rrd-3h26"
+# DOF Tax Lien Sale Lists dataset ID (updated — old 9rrd-3h26 is retired)
+TAX_LIEN_DATASET_ID = "9rz4-mjek"
 
 BOROUGH_MAP: dict[str, str] = {
     "1": "Manhattan",
@@ -171,21 +171,26 @@ def normalize_borough(raw: str) -> Optional[str]:
 
 def fetch_foreclosures(limit: Optional[int] = None) -> list[dict]:
     """
-    Fetch lis pendens (foreclosure) records from ACRIS.
+    Fetch foreclosure judgment records from ACRIS.
 
-    Step 1: Pull recent LP documents from the Master table.
+    Uses doc_type=JUDG (court judgments recorded against properties),
+    which includes foreclosure judgments filed with the NYC Register.
+    Note: lis pendens are filed with County Clerks, not ACRIS, so JUDG
+    is the closest available foreclosure signal in this dataset.
+
+    Step 1: Pull recent JUDG documents from the Master table.
     Step 2: Look up the property address in the Legals table.
     """
-    log.info("Fetching foreclosure (lis pendens) records from ACRIS master...")
+    log.info("Fetching foreclosure judgment records from ACRIS master...")
 
-    # Fetch master records where doc_type = 'LP' (Lis Pendens), last 12 months
+    # Fetch master records where doc_type = 'JUDG', last 12 months
     master_rows = soda_get_all(
         ACRIS_MASTER_ID,
-        where="doc_type='LP' AND document_date > '2024-01-01T00:00:00.000'",
+        where="doc_type='JUDG' AND recorded_datetime > '2024-01-01T00:00:00.000'",
         select="document_id,doc_type,document_date,document_amt,recorded_datetime",
         limit=limit,
     )
-    log.info("  got %d master LP records", len(master_rows))
+    log.info("  got %d master JUDG records", len(master_rows))
     if not master_rows:
         return []
 
@@ -263,17 +268,17 @@ def fetch_foreclosures(limit: Optional[int] = None) -> list[dict]:
 
 def fetch_tax_liens(limit: Optional[int] = None) -> list[dict]:
     """
-    Fetch tax lien sale properties from the DOF Tax Lien Sale dataset.
+    Fetch tax lien sale properties from the DOF Tax Lien Sale Lists dataset.
 
-    The dataset contains properties where the city has sold the tax lien
-    to a third party. Fields vary by year; we normalize to our schema.
+    Dataset 9rz4-mjek fields: house_number, street_name, borough (1-5),
+    zip_code, block, lot, month (date), cycle, building_class.
     """
     log.info("Fetching tax lien sale records from DOF...")
 
     rows = soda_get_all(
         TAX_LIEN_DATASET_ID,
-        where="tl_status_date IS NOT NULL",
-        select="borough,block,lot,owner_name,billing_address,zip,tl_status_date",
+        where="month IS NOT NULL",
+        select="borough,block,lot,house_number,street_name,zip_code,month,building_class",
         limit=limit,
     )
     log.info("  got %d tax lien records", len(rows))
@@ -287,15 +292,16 @@ def fetch_tax_liens(limit: Optional[int] = None) -> list[dict]:
         if not borough:
             continue
 
-        billing_address = (row.get("billing_address") or "").strip()
-        if not billing_address:
-            # Fall back to block/lot description when no billing address
+        house_num = (row.get("house_number") or "").strip()
+        street = (row.get("street_name") or "").strip()
+        if not house_num or not street:
             block = row.get("block", "")
             lot = row.get("lot", "")
-            billing_address = f"Block {block} Lot {lot}"
+            address = f"Block {block} Lot {lot}".title()
+        else:
+            address = f"{house_num} {street}".title()
 
-        address = billing_address.title()
-        zip_code = (row.get("zip") or "").strip()
+        zip_code = (row.get("zip_code") or "").strip()
 
         dedup_key = f"{address}|{borough}"
         if dedup_key in seen:
@@ -309,7 +315,7 @@ def fetch_tax_liens(limit: Optional[int] = None) -> list[dict]:
             "deal_type": "tax_lien",
             "source": "nyc_open_data",
             "source_url": f"https://data.cityofnewyork.us/resource/{TAX_LIEN_DATASET_ID}.json",
-            "listed_at": row.get("tl_status_date"),
+            "listed_at": row.get("month"),
             "_needs_geocode": True,
         })
 
@@ -368,10 +374,7 @@ def upsert_properties(properties: list[dict], dry_run: bool = False) -> int:
 
     for i in range(0, len(rows), batch_size):
         batch = rows[i : i + batch_size]
-        client.table("properties").upsert(
-            batch,
-            on_conflict="address,borough",
-        ).execute()
+        client.table("properties").upsert(batch, on_conflict="address,borough").execute()
         total += len(batch)
         log.info("  upserted batch %d/%d (%d rows)", i // batch_size + 1, num_batches, len(batch))
 
