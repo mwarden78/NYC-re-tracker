@@ -31,8 +31,6 @@ import time
 from typing import Optional
 
 import requests
-from geopy.exc import GeocoderTimedOut
-from geopy.geocoders import Nominatim
 
 # Allow running from project root: python data/ingest_nyc_open_data.py
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -128,35 +126,47 @@ def soda_get_all(dataset_id: str, where: str, select: str = "*", limit: Optional
 
 
 # ---------------------------------------------------------------------------
-# Geocoding
+# Geocoding — NYC Planning GeoSearch API
 # ---------------------------------------------------------------------------
 
-_geolocator = Nominatim(user_agent="nyc-re-tracker/1.0")
+GEOSEARCH_URL = "https://geosearch.planninglabs.nyc/v2/search"
 _geocache: dict[str, tuple[Optional[float], Optional[float]]] = {}
 
 
 def geocode_address(address: str, borough: str) -> tuple[Optional[float], Optional[float]]:
-    """Return (lat, lng) for a NYC address, or (None, None) on failure."""
-    query = f"{address}, {borough}, New York City, NY"
-    if query in _geocache:
-        return _geocache[query]
+    """Return (lat, lng) for a NYC address using the NYC GeoSearch API.
 
+    Free, no API key required, optimised for NYC addresses.
+    Returns (None, None) on any failure without raising.
+    """
+    cache_key = f"{address}|{borough}"
+    if cache_key in _geocache:
+        return _geocache[cache_key]
+
+    text = f"{address}, {borough}"
     for attempt in range(3):
         try:
-            time.sleep(1.0)  # Nominatim rate limit: 1 req/sec
-            loc = _geolocator.geocode(query, timeout=10)
-            if loc:
-                result = (loc.latitude, loc.longitude)
-                _geocache[query] = result
+            resp = requests.get(
+                GEOSEARCH_URL,
+                params={"text": text, "size": 1},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            features = resp.json().get("features", [])
+            if features:
+                lng, lat = features[0]["geometry"]["coordinates"]
+                result = (float(lat), float(lng))
+                _geocache[cache_key] = result
                 return result
-            _geocache[query] = (None, None)
+            _geocache[cache_key] = (None, None)
             return (None, None)
-        except GeocoderTimedOut:
+        except Exception as exc:
             if attempt < 2:
                 time.sleep(2 ** attempt)
             else:
-                log.warning("Geocoder timed out for: %s", query)
-    _geocache[query] = (None, None)
+                log.warning("Geocoding failed for %r: %s", text, exc)
+
+    _geocache[cache_key] = (None, None)
     return (None, None)
 
 
