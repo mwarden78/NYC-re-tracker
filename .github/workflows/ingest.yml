@@ -1,0 +1,48 @@
+name: Daily NYC Open Data Ingestion
+
+on:
+  schedule:
+    - cron: "0 6 * * *"  # 6am UTC daily
+  workflow_dispatch:       # manual trigger
+
+jobs:
+  ingest:
+    name: Ingest NYC Open Data
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run ingestion script
+        id: ingest
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          NYC_OPEN_DATA_APP_TOKEN: ${{ secrets.NYC_OPEN_DATA_APP_TOKEN }}
+        run: |
+          python data/ingest_nyc_open_data.py 2>&1 | tee ingest.log
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Summarize results
+        if: always()
+        run: |
+          echo "## Ingestion Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          UPSERTED=$(grep -oP 'Total: \K[0-9]+' ingest.log || echo "unknown")
+          echo "- **Records upserted:** $UPSERTED" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Run triggered by:** ${{ github.event_name }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Status:** ${{ steps.ingest.outputs.exit_code == '0' && 'success' || 'failed' }}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail if ingestion errored
+        if: steps.ingest.outputs.exit_code != '0'
+        run: exit 1
