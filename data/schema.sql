@@ -61,6 +61,22 @@ CREATE INDEX IF NOT EXISTS idx_properties_created_at ON properties(created_at DE
 CREATE INDEX IF NOT EXISTS idx_deals_status ON deals(status);
 CREATE INDEX IF NOT EXISTS idx_deals_property_id ON deals(property_id);
 
+-- Violations table: HPD and DOB violations linked to properties
+CREATE TABLE IF NOT EXISTS violations (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    property_id UUID NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+    source TEXT NOT NULL CHECK (source IN ('hpd', 'dob')),
+    external_id TEXT,          -- source-specific violation ID for deduplication
+    violation_type TEXT,
+    description TEXT,
+    status TEXT,
+    issued_date DATE,
+    closed_date DATE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (source, external_id)
+);
+CREATE INDEX IF NOT EXISTS idx_violations_property_id ON violations(property_id);
+
 -- Seed a few sample properties for testing
 INSERT INTO properties (address, borough, zip_code, property_type, deal_type, price, sqft, bedrooms, bathrooms, lat, lng, source, listed_at)
 VALUES
