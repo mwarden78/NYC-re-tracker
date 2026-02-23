@@ -96,6 +96,32 @@ def update_deal_notes(deal_id: str, notes: str) -> None:
 
 
 @st.cache_data(ttl=_TTL)
+def load_violations_by_property(property_id: str) -> list[dict]:
+    """Return all violations for a single property, ordered by issued_date desc."""
+    client = get_client()
+    result = (
+        client.table("violations")
+        .select("*")
+        .eq("property_id", property_id)
+        .order("issued_date", desc=True)
+        .execute()
+    )
+    return result.data or []
+
+
+@st.cache_data(ttl=_TTL)
+def load_violation_counts() -> dict[str, int]:
+    """Return {property_id: violation_count} for all properties with violations."""
+    client = get_client()
+    result = client.table("violations").select("property_id").execute()
+    counts: dict[str, int] = {}
+    for row in (result.data or []):
+        pid = row["property_id"]
+        counts[pid] = counts.get(pid, 0) + 1
+    return counts
+
+
+@st.cache_data(ttl=_TTL)
 def load_summary() -> dict:
     """Return aggregate counts for the home page dashboard."""
     properties = load_properties()
