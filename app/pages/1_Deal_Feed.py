@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 import streamlit as st
-from db import add_to_pipeline, load_deals, load_properties
+from db import add_to_pipeline, load_deals, load_properties, load_violation_counts
 
 st.set_page_config(page_title="Deal Feed | NYC RE Tracker", page_icon="🏠", layout="wide")
 
@@ -18,6 +18,7 @@ st.caption("Browse foreclosure and tax lien properties")
 try:
     all_properties = load_properties()
     deals = load_deals()
+    violation_counts = load_violation_counts()
 except Exception as e:
     st.error(f"Could not load data from Supabase. Check your `.env` file. ({e})")
     st.stop()
@@ -169,7 +170,7 @@ def _days_ago(dt_str: str | None) -> int | None:
         return None
 
 
-def _render_card(prop: dict) -> None:
+def _render_card(prop: dict, viol_count: int = 0) -> None:
     prop_id = prop["id"]
     deal_type = prop.get("deal_type", "")
     icon = DEAL_ICONS.get(deal_type, "⚪")
@@ -214,6 +215,9 @@ def _render_card(prop: dict) -> None:
         if days is not None:
             st.caption(f"Listed {days}d ago")
 
+        if viol_count > 0:
+            st.caption(f"⚠️ {viol_count} violation{'s' if viol_count != 1 else ''}")
+
         st.divider()
 
         if pipeline_status:
@@ -254,4 +258,4 @@ else:
     cols = st.columns(3)
     for i, prop in enumerate(filtered):
         with cols[i % 3]:
-            _render_card(prop)
+            _render_card(prop, viol_count=violation_counts.get(prop["id"], 0))

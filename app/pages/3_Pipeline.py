@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import streamlit as st
-from db import load_deals, update_deal_status
+from db import load_deals, load_violation_counts, update_deal_status
 
 st.set_page_config(page_title="Pipeline | NYC RE Tracker", page_icon="📋", layout="wide")
 
@@ -53,6 +53,10 @@ def _render_deal_card(deal: dict) -> None:
     if deal.get("notes"):
         st.caption(f"📝 {deal['notes']}")
 
+    viol_count = violation_counts.get(prop.get("id", ""), 0)
+    if viol_count > 0:
+        st.caption(f"⚠️ {viol_count} violation{'s' if viol_count != 1 else ''}")
+
     current_status = deal.get("status", "watching")
     new_status = st.selectbox(
         "Stage",
@@ -74,6 +78,7 @@ def _render_deal_card(deal: dict) -> None:
 
 try:
     deals = load_deals()
+    violation_counts = load_violation_counts()
 except Exception as e:
     st.error(f"Could not load deals from Supabase. Check your `.env` file. ({e})")
     st.stop()

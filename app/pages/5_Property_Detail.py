@@ -12,6 +12,7 @@ from db import (
     add_to_pipeline,
     load_deal_by_property,
     load_property_by_id,
+    load_violations_by_property,
     update_deal_notes,
     update_deal_status,
 )
@@ -192,10 +193,59 @@ with notes_col:
 st.divider()
 
 # ---------------------------------------------------------------------------
-# Violations placeholder (TES-20)
+# Violations
 # ---------------------------------------------------------------------------
-with st.expander("⚠️ Violations", expanded=False):
-    st.info("HPD and DOB violations will appear here. *(Coming in TES-20)*")
+try:
+    violations = load_violations_by_property(property_id)
+except Exception as e:
+    violations = []
+    st.warning(f"Could not load violations: {e}")
+
+hpd_viols = [v for v in violations if v.get("source") == "hpd"]
+dob_viols = [v for v in violations if v.get("source") == "dob"]
+total_count = len(violations)
+
+expander_label = f"⚠️ Violations ({total_count})" if total_count else "⚠️ Violations"
+with st.expander(expander_label, expanded=total_count > 0):
+    if not violations:
+        st.info("No violations on record.")
+    else:
+        hpd_tab, dob_tab = st.tabs([
+            f"HPD ({len(hpd_viols)})",
+            f"DOB ({len(dob_viols)})",
+        ])
+
+        with hpd_tab:
+            if not hpd_viols:
+                st.info("No HPD violations.")
+            else:
+                for v in hpd_viols:
+                    with st.container(border=True):
+                        c1, c2, c3 = st.columns([1, 2, 1])
+                        vtype = v.get("violation_type") or "?"
+                        c1.markdown(f"**Class {vtype}**")
+                        status = v.get("status") or ""
+                        c2.caption(f"{'🔴' if status == 'Open' else '🟢'} {status}")
+                        c3.caption(v.get("issued_date") or "")
+                        if v.get("description"):
+                            st.caption(v["description"])
+
+        with dob_tab:
+            if not dob_viols:
+                st.info("No DOB violations.")
+            else:
+                for v in dob_viols:
+                    with st.container(border=True):
+                        vtype = v.get("violation_type") or ""
+                        status = v.get("status") or ""
+                        c1, c2 = st.columns([3, 1])
+                        if vtype:
+                            c1.markdown(f"**{vtype}**")
+                        c2.caption(f"{'🔴' if status == 'Open' else '🟢'} {status}")
+                        if v.get("issued_date"):
+                            st.caption(f"Issued: {v['issued_date']}")
+                        if v.get("description"):
+                            st.caption(v["description"])
 
 # ---------------------------------------------------------------------------
 # Deal Calculator placeholder (TES-21)
