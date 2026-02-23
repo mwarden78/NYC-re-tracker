@@ -248,7 +248,112 @@ with st.expander(expander_label, expanded=total_count > 0):
                             st.caption(v["description"])
 
 # ---------------------------------------------------------------------------
-# Deal Calculator placeholder (TES-21)
+# Deal Calculator (TES-21)
 # ---------------------------------------------------------------------------
-with st.expander("🧮 Quick Deal Calculator", expanded=False):
-    st.info("Deal calculator will appear here. *(Coming in TES-21)*")
+with st.expander("🧮 Quick Deal Calculator", expanded=True):
+    st.caption("Fix-and-flip analysis based on the 70% rule")
+
+    inp_left, inp_right = st.columns(2)
+
+    with inp_left:
+        calc_purchase = st.number_input(
+            "Purchase Price ($)",
+            min_value=0,
+            max_value=50_000_000,
+            value=int(price) if price else 0,
+            step=10_000,
+            format="%d",
+            key="calc_purchase",
+        )
+        calc_reno = st.slider(
+            "Renovation Budget ($)",
+            min_value=0,
+            max_value=500_000,
+            value=50_000,
+            step=5_000,
+            format="$%d",
+            key="calc_reno",
+        )
+        calc_arv = st.number_input(
+            "After-Repair Value / ARV ($)",
+            min_value=0,
+            max_value=50_000_000,
+            value=int(price * 1.3) if price else 0,
+            step=10_000,
+            format="%d",
+            key="calc_arv",
+        )
+
+    # Core calculations
+    max_offer = calc_arv * 0.70 - calc_reno if calc_arv else 0
+    total_cost = calc_purchase + calc_reno
+    projected_profit = calc_arv - total_cost if calc_arv else 0
+    roi = (projected_profit / total_cost * 100) if total_cost > 0 and calc_arv else 0
+
+    with inp_right:
+        st.metric("Max Offer (70% Rule)", f"${max_offer:,.0f}" if calc_arv else "—")
+        st.metric(
+            "Projected Profit",
+            f"${projected_profit:,.0f}" if calc_arv else "—",
+            delta=f"{roi:.1f}% ROI" if calc_arv and total_cost else None,
+        )
+        st.metric("Total Investment", f"${total_cost:,.0f}")
+
+    # Verdict
+    if calc_arv and calc_purchase:
+        if calc_purchase <= max_offer:
+            st.success(
+                f"✅ **Good deal** — purchase price is "
+                f"${max_offer - calc_purchase:,.0f} under the 70% max offer."
+            )
+        elif calc_purchase <= max_offer * 1.15:
+            st.warning(
+                f"⚠️ **Borderline** — purchase price is "
+                f"${calc_purchase - max_offer:,.0f} above the 70% max offer."
+            )
+        else:
+            st.error(
+                f"❌ **Over max offer** — exceeds 70% rule by "
+                f"${calc_purchase - max_offer:,.0f}."
+            )
+
+    st.divider()
+
+    # Financing
+    st.caption("**Financing (optional)**")
+    fin1, fin2, fin3 = st.columns(3)
+    with fin1:
+        down_pct = st.slider("Down Payment %", 10, 50, 20, step=5, key="calc_down")
+    with fin2:
+        interest_rate = st.slider("Interest Rate %", 4.0, 15.0, 7.5, step=0.25, key="calc_rate")
+    with fin3:
+        loan_term = st.selectbox(
+            "Loan Term",
+            [12, 18, 24, 36],
+            format_func=lambda x: f"{x} months",
+            key="calc_term",
+        )
+
+    if calc_purchase > 0:
+        loan_amount = calc_purchase * (1 - down_pct / 100)
+        down_payment = calc_purchase * (down_pct / 100)
+        monthly_rate = (interest_rate / 100) / 12
+        n = loan_term
+        if monthly_rate > 0:
+            monthly_payment = (
+                loan_amount * (monthly_rate * (1 + monthly_rate) ** n)
+                / ((1 + monthly_rate) ** n - 1)
+            )
+        else:
+            monthly_payment = loan_amount / n
+        total_interest = monthly_payment * loan_term - loan_amount
+        total_cash_in = down_payment + calc_reno
+
+        fc1, fc2, fc3 = st.columns(3)
+        fc1.metric("Monthly Payment", f"${monthly_payment:,.0f}")
+        fc2.metric("Total Interest", f"${total_interest:,.0f}")
+        fc3.metric("Cash In (down + reno)", f"${total_cash_in:,.0f}")
+
+        if calc_arv and projected_profit > 0 and total_cash_in > 0:
+            coc = (projected_profit - total_interest) / total_cash_in * 100
+            st.metric("Cash-on-Cash Return", f"{coc:.1f}%")
