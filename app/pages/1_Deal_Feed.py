@@ -226,6 +226,10 @@ def _render_card(prop: dict) -> None:
                 except Exception as exc:
                     st.error(f"Failed to add to pipeline: {exc}")
 
+        if st.button("View Details →", key=f"detail_{prop_id}", use_container_width=True):
+            st.query_params["property_id"] = prop_id
+            st.switch_page("pages/5_Property_Detail.py")
+
 
 # ---------------------------------------------------------------------------
 # Property grid
