@@ -1,4 +1,4 @@
-"""Map View — properties plotted on an interactive NYC map (TES-11, TES-22)."""
+"""Map View — properties plotted on an interactive NYC map (TES-11, TES-22, TES-23)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from collections import Counter
 import pandas as pd
 import pydeck as pdk
 import streamlit as st
-from db import load_deals, load_properties
+from db import add_to_pipeline, load_deals, load_properties, load_violation_counts
 
 st.set_page_config(page_title="Map | NYC RE Tracker", page_icon="🗺", layout="wide")
 
@@ -20,6 +20,7 @@ st.caption("Geographic view of all tracked properties")
 try:
     properties = load_properties()
     deals = load_deals()
+    violation_counts = load_violation_counts()
 except Exception as e:
     st.error(f"Could not load data from Supabase. Check your `.env` file. ({e})")
     st.stop()
@@ -40,6 +41,18 @@ DEAL_LABELS = {
     "tax_lien": "Tax Lien",
     "listing": "Listing",
     "off_market": "Off Market",
+}
+DEAL_ICONS = {
+    "foreclosure": "🔴",
+    "tax_lien": "🟠",
+    "listing": "🔵",
+    "off_market": "🟣",
+}
+PIPELINE_LABELS = {
+    "watching": "👁 Watching",
+    "analyzing": "🔍 Analyzing",
+    "offer_made": "📝 Offer Made",
+    "dead": "💀 Dead",
 }
 
 # ---------------------------------------------------------------------------
@@ -70,7 +83,7 @@ with st.sidebar:
         cluster_precision = st.slider(
             "Cluster radius",
             min_value=1, max_value=4, value=2,
-            help="Higher = tighter clusters (zoom in). Lower = broader grouping.",
+            help="Higher = tighter clusters. Lower = broader grouping.",
         )
 
 # ---------------------------------------------------------------------------
@@ -79,6 +92,8 @@ with st.sidebar:
 deal_type_values = {DEAL_TYPE_OPTIONS[k] for k in deal_type_sel}
 
 rows = []
+prop_by_index: dict[int, dict] = {}  # row index → full property dict for click lookup
+
 for p in properties:
     lat = p.get("lat")
     lng = p.get("lng")
@@ -92,6 +107,8 @@ for p in properties:
         continue
 
     deal_type = p.get("deal_type", "")
+    idx = len(rows)
+    prop_by_index[idx] = p
     rows.append({
         "lat": float(lat),
         "lng": float(lng),
@@ -119,10 +136,6 @@ if not rows:
 # ---------------------------------------------------------------------------
 
 def build_clusters(rows: list[dict], precision: int) -> tuple[list[dict], list[dict]]:
-    """
-    Group rows into grid cells by rounding lat/lng to `precision` decimals.
-    Returns (cluster_rows, label_rows) for ScatterplotLayer + TextLayer.
-    """
     buckets: dict[tuple, list[dict]] = {}
     for row in rows:
         key = (round(row["lat"], precision), round(row["lng"], precision))
@@ -133,80 +146,46 @@ def build_clusters(rows: list[dict], precision: int) -> tuple[list[dict], list[d
         count = len(members)
         avg_lat = sum(r["lat"] for r in members) / count
         avg_lng = sum(r["lng"] for r in members) / count
-
-        # Dominant deal type → color
         dominant = Counter(r["deal_type"] for r in members).most_common(1)[0][0]
-        color = DEAL_COLORS.get(dominant, [100, 100, 100, 200])
-        # Slight transparency boost for clusters
-        color = color[:3] + [220]
-
-        # Summary tooltip
+        color = DEAL_COLORS.get(dominant, [100, 100, 100, 200])[:3] + [220]
         type_counts = Counter(r["deal_type"] for r in members)
         summary = " · ".join(
             f"{DEAL_LABELS.get(dt, dt)}: {n}" for dt, n in type_counts.most_common()
         )
-
-        cluster_rows.append({
-            "lat": avg_lat,
-            "lng": avg_lng,
-            "count": count,
-            "color": color,
-            "summary": summary,
-        })
-        label_rows.append({
-            "lat": avg_lat,
-            "lng": avg_lng,
-            "label": str(count) if count > 1 else "",
-        })
+        cluster_rows.append({"lat": avg_lat, "lng": avg_lng, "count": count,
+                              "color": color, "summary": summary})
+        label_rows.append({"lat": avg_lat, "lng": avg_lng,
+                           "label": str(count) if count > 1 else ""})
 
     return cluster_rows, label_rows
 
 
 # ---------------------------------------------------------------------------
-# Build layers
+# Build layers + render map
 # ---------------------------------------------------------------------------
+selected_prop = None
 
 if cluster_mode:
     cluster_rows, label_rows = build_clusters(rows, cluster_precision)
     df_clusters = pd.DataFrame(cluster_rows)
     df_labels = pd.DataFrame(label_rows)
 
-    max_count = df_clusters["count"].max() if len(df_clusters) else 1
-
-    scatter_layer = pdk.Layer(
-        "ScatterplotLayer",
-        data=df_clusters,
-        get_position=["lng", "lat"],
-        get_fill_color="color",
-        get_radius="count",
-        radius_scale=120,
-        radius_min_pixels=10,
-        radius_max_pixels=60,
-        pickable=True,
-    )
-
-    text_layer = pdk.Layer(
-        "TextLayer",
-        data=df_labels,
-        get_position=["lng", "lat"],
-        get_text="label",
-        get_size=14,
-        get_color=[255, 255, 255, 230],
-        get_alignment_baseline="'center'",
-        get_text_anchor="'middle'",
-    )
-
+    layers = [
+        pdk.Layer("ScatterplotLayer", data=df_clusters, get_position=["lng", "lat"],
+                  get_fill_color="color", get_radius="count", radius_scale=120,
+                  radius_min_pixels=10, radius_max_pixels=60, pickable=True),
+        pdk.Layer("TextLayer", data=df_labels, get_position=["lng", "lat"],
+                  get_text="label", get_size=14, get_color=[255, 255, 255, 230],
+                  get_alignment_baseline="'center'", get_text_anchor="'middle'"),
+    ]
     tooltip = {
         "html": "<b>{count} properties</b><br/>{summary}",
-        "style": {
-            "backgroundColor": "#1e293b",
-            "color": "white",
-            "fontSize": "13px",
-            "padding": "8px",
-            "borderRadius": "4px",
-        },
+        "style": {"backgroundColor": "#1e293b", "color": "white",
+                  "fontSize": "13px", "padding": "8px", "borderRadius": "4px"},
     }
-    layers = [scatter_layer, text_layer]
+    st.pydeck_chart(pdk.Deck(layers=layers,
+        initial_view_state=pdk.ViewState(latitude=40.7128, longitude=-74.0060, zoom=10),
+        tooltip=tooltip, map_style="mapbox://styles/mapbox/dark-v10"))
 
 else:
     df = pd.DataFrame([{
@@ -217,6 +196,7 @@ else:
 
     scatter_layer = pdk.Layer(
         "ScatterplotLayer",
+        id="pins",
         data=df,
         get_position=["lng", "lat"],
         get_fill_color="color",
@@ -224,43 +204,73 @@ else:
         radius_min_pixels=6,
         radius_max_pixels=20,
         pickable=True,
+        auto_highlight=True,
     )
-
     tooltip = {
-        "html": (
-            "<b>{address}</b><br/>"
-            "{deal_label} · {borough}<br/>"
-            "Price: {price_fmt}<br/>"
-            "Pipeline: {pipeline_fmt}"
-        ),
-        "style": {
-            "backgroundColor": "#1e293b",
-            "color": "white",
-            "fontSize": "13px",
-            "padding": "8px",
-            "borderRadius": "4px",
-        },
+        "html": "<b>{address}</b><br/>{deal_label} · {borough}<br/>Price: {price_fmt}<br/>Pipeline: {pipeline_fmt}",
+        "style": {"backgroundColor": "#1e293b", "color": "white",
+                  "fontSize": "13px", "padding": "8px", "borderRadius": "4px"},
     }
-    layers = [scatter_layer]
-
-# ---------------------------------------------------------------------------
-# Render map
-# ---------------------------------------------------------------------------
-view_state = pdk.ViewState(
-    latitude=40.7128,
-    longitude=-74.0060,
-    zoom=10,
-    pitch=0,
-)
-
-st.pydeck_chart(
-    pdk.Deck(
-        layers=layers,
-        initial_view_state=view_state,
+    deck = pdk.Deck(
+        layers=[scatter_layer],
+        initial_view_state=pdk.ViewState(latitude=40.7128, longitude=-74.0060, zoom=10),
         tooltip=tooltip,
         map_style="mapbox://styles/mapbox/dark-v10",
     )
-)
+
+    try:
+        chart_event = st.pydeck_chart(deck, on_select="rerun", selection_mode="single-object")
+        selected_indices = (chart_event.selection or {}).get("indices", {}).get("pins", [])
+        selected_prop = prop_by_index.get(selected_indices[0]) if selected_indices else None
+    except TypeError:
+        # Fallback for older Streamlit without on_select support
+        st.pydeck_chart(deck)
+
+
+# ---------------------------------------------------------------------------
+# Selected pin detail panel
+# ---------------------------------------------------------------------------
+
+if selected_prop:
+    st.divider()
+    pid = selected_prop["id"]
+    deal_type = selected_prop.get("deal_type", "")
+    pipeline_status = tracked.get(pid)
+    vcount = violation_counts.get(pid, 0)
+    price = selected_prop.get("price")
+
+    with st.container(border=True):
+        col_info, col_actions = st.columns([3, 1])
+
+        with col_info:
+            icon = DEAL_ICONS.get(deal_type, "⚪")
+            label = DEAL_LABELS.get(deal_type, deal_type)
+            st.markdown(f"### {selected_prop.get('address', '')}")
+            st.caption(f"{icon} {label} · {selected_prop.get('borough', '')}")
+
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Price", f"${price:,.0f}" if price else "—")
+            m2.metric("Violations", vcount if vcount else "0")
+            m3.metric(
+                "Pipeline",
+                PIPELINE_LABELS.get(pipeline_status, "Not tracked") if pipeline_status else "Not tracked",
+            )
+
+        with col_actions:
+            st.page_link(
+                "pages/5_Property_Detail.py",
+                label="View Full Details →",
+            )
+            if pipeline_status:
+                st.success(PIPELINE_LABELS.get(pipeline_status, pipeline_status))
+            else:
+                if st.button("+ Watch", use_container_width=True, key=f"watch_{pid}"):
+                    try:
+                        add_to_pipeline(pid, "watching")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed: {e}")
+
 
 # ---------------------------------------------------------------------------
 # Legend + summary
@@ -289,6 +299,6 @@ with col_stats:
         cluster_count = len(build_clusters(rows, cluster_precision)[0])
         st.caption(f"**{mapped}** properties in **{cluster_count}** clusters")
     else:
-        st.caption(f"**{mapped}** pins shown")
+        st.caption(f"**{mapped}** pins shown · click a pin for details")
     if no_coords:
         st.caption(f"*{no_coords} properties skipped (no coordinates)*")
