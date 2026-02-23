@@ -62,6 +62,40 @@ def update_deal_status(deal_id: str, new_status: str) -> None:
 
 
 @st.cache_data(ttl=_TTL)
+def load_property_by_id(property_id: str) -> dict | None:
+    """Return a single property by ID, or None if not found."""
+    client = get_client()
+    result = (
+        client.table("properties")
+        .select("*")
+        .eq("id", property_id)
+        .limit(1)
+        .execute()
+    )
+    return result.data[0] if result.data else None
+
+
+def load_deal_by_property(property_id: str) -> dict | None:
+    """Return the deal for a property, or None if not tracked."""
+    client = get_client()
+    result = (
+        client.table("deals")
+        .select("*")
+        .eq("property_id", property_id)
+        .limit(1)
+        .execute()
+    )
+    return result.data[0] if result.data else None
+
+
+def update_deal_notes(deal_id: str, notes: str) -> None:
+    """Update a deal's notes and clear the cache."""
+    client = get_client()
+    client.table("deals").update({"notes": notes}).eq("id", deal_id).execute()
+    st.cache_data.clear()
+
+
+@st.cache_data(ttl=_TTL)
 def load_summary() -> dict:
     """Return aggregate counts for the home page dashboard."""
     properties = load_properties()
