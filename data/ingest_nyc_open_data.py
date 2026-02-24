@@ -441,7 +441,8 @@ def fetch_tax_liens(limit: Optional[int] = None, lookback_months: int = 13) -> l
     rows = soda_get_all(
         TAX_LIEN_DATASET_ID,
         where=f"month > '{since}'",
-        select="borough,block,lot,house_number,street_name,zip_code,month,building_class",
+        select="borough,block,lot,house_number,street_name,zip_code,month,"
+               "building_class,tax_class_code,cycle,water_debt_only",
         limit=limit,
     )
     log.info("  got %d tax lien records", len(rows))
@@ -473,7 +474,13 @@ def fetch_tax_liens(limit: Optional[int] = None, lookback_months: int = 13) -> l
         seen.add(dedup_key)
 
         # Construct BBL from DOF block/lot — geocoding pass may refine this
-        bbl = construct_bbl(raw_borough, row.get("block", ""), row.get("lot", ""))
+        raw_block = (row.get("block") or "").strip()
+        raw_lot = (row.get("lot") or "").strip()
+        bbl = construct_bbl(raw_borough, raw_block, raw_lot)
+
+        # water_debt_only comes as "YES"/"NO" string from Socrata
+        water_raw = (row.get("water_debt_only") or "").strip().upper()
+        water_debt_only = True if water_raw == "YES" else (False if water_raw == "NO" else None)
 
         properties.append({
             "address": address,
@@ -484,6 +491,12 @@ def fetch_tax_liens(limit: Optional[int] = None, lookback_months: int = 13) -> l
             "source_url": f"https://data.cityofnewyork.us/resource/{TAX_LIEN_DATASET_ID}.json",
             "listed_at": row.get("month"),
             "bbl": bbl,
+            "building_class": row.get("building_class") or None,
+            "block": raw_block or None,
+            "lot": raw_lot or None,
+            "tax_class_code": row.get("tax_class_code") or None,
+            "lien_cycle": row.get("cycle") or None,
+            "water_debt_only": water_debt_only,
             "_needs_geocode": True,
         })
 
@@ -578,6 +591,7 @@ def add_coordinates(properties: list[dict]) -> None:
 UPSERT_COLUMNS = [
     "address", "borough", "zip_code", "deal_type", "price",
     "source", "source_url", "lat", "lng", "bbl", "listed_at",
+    "building_class", "block", "lot", "tax_class_code", "lien_cycle", "water_debt_only",
 ]
 
 
