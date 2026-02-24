@@ -22,7 +22,23 @@ CREATE TABLE IF NOT EXISTS properties (
     source TEXT,         -- e.g. 'nyc_open_data', 'manual', 'zillow'
     listed_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+
+    -- BBL (Borough-Block-Lot): 10-digit NYC parcel identifier used to join
+    -- against PLUTO and ACRIS. Format: B(1) + BLOCK(5,zero-padded) + LOT(4,zero-padded)
+    bbl TEXT,
+
+    -- PLUTO-enriched fields (populated by data/enrich_pluto.py)
+    assessed_value  NUMERIC,   -- DOF total assessed value
+    market_value    NUMERIC,   -- DOF full market value
+    num_units       INTEGER,   -- residential units (PLUTO unitsres)
+    num_floors      INTEGER,   -- number of floors (PLUTO numfloors)
+    land_use        TEXT,      -- PLUTO land use code + label, e.g. '02 - Two-Family Buildings'
+    zoning_district TEXT,      -- primary zoning district, e.g. 'R6', 'M1-2'
+
+    -- ACRIS DEED enrichment (populated by data/enrich_last_sale.py)
+    last_sale_price NUMERIC,   -- most recent recorded sale price
+    last_sale_date  DATE       -- most recent recorded sale date
 );
 
 -- Deals table: tracks a user's pipeline status for a property
@@ -58,6 +74,7 @@ CREATE INDEX IF NOT EXISTS idx_properties_deal_type ON properties(deal_type);
 CREATE INDEX IF NOT EXISTS idx_properties_property_type ON properties(property_type);
 CREATE INDEX IF NOT EXISTS idx_properties_price ON properties(price);
 CREATE INDEX IF NOT EXISTS idx_properties_created_at ON properties(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_properties_bbl ON properties(bbl);
 CREATE INDEX IF NOT EXISTS idx_deals_status ON deals(status);
 CREATE INDEX IF NOT EXISTS idx_deals_property_id ON deals(property_id);
 
