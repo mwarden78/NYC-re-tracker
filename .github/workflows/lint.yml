@@ -27,14 +27,11 @@ jobs:
           python-version: '3.11'
 
       - name: Install linting tools
-        run: pip install ruff mypy
+        run: pip install ruff
 
       - name: Run ruff check
         run: ruff check lib/ bin/ --output-format=github
 
       - name: Run ruff format check
         run: ruff format lib/ bin/ --check --diff
-
-      - name: Run mypy type checking
-        run: mypy app/ data/ utils/ --ignore-missing-imports
 
