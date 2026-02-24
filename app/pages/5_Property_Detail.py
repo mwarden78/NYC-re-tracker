@@ -110,6 +110,8 @@ price_per_sqft = prop.get("price_per_sqft") or (
 beds = prop.get("bedrooms")
 baths = prop.get("bathrooms")
 year_built = prop.get("year_built")
+building_class = prop.get("building_class")
+tax_class_code = prop.get("tax_class_code")
 
 m1, m2, m3, m4, m5, m6 = st.columns(6)
 m1.metric("Price", f"${price:,.0f}" if price else "—")
@@ -118,6 +120,12 @@ m3.metric("Sqft", f"{sqft:,}" if sqft else "—")
 m4.metric("Beds", int(beds) if beds is not None else "—")
 m5.metric("Baths", f"{baths:g}" if baths is not None else "—")
 m6.metric("Year Built", year_built if year_built else "—")
+
+# Tax lien fields — only shown when present (tax_lien deal type)
+if building_class or tax_class_code:
+    tc1, tc2, tc3 = st.columns([1, 1, 4])
+    tc1.metric("Bldg Class", building_class if building_class else "—")
+    tc2.metric("Tax Class", tax_class_code if tax_class_code else "—")
 
 st.divider()
 

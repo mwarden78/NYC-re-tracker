@@ -28,6 +28,14 @@ CREATE TABLE IF NOT EXISTS properties (
     -- against PLUTO and ACRIS. Format: B(1) + BLOCK(5,zero-padded) + LOT(4,zero-padded)
     bbl TEXT,
 
+    -- DOF Tax Lien fields (populated during tax lien ingestion)
+    building_class  TEXT,      -- e.g. 'A1', 'D4', 'Z9' (DOF building class)
+    block           TEXT,      -- BBL block number from DOF dataset
+    lot             TEXT,      -- BBL lot number from DOF dataset
+    tax_class_code  TEXT,      -- tax class: '1', '2', '4'
+    lien_cycle      TEXT,      -- e.g. '90 Day Notice', 'In Rem'
+    water_debt_only BOOLEAN,   -- true when lien is water-debt only
+
     -- PLUTO-enriched fields (populated by data/enrich_pluto.py)
     assessed_value  NUMERIC,   -- DOF total assessed value
     market_value    NUMERIC,   -- DOF full market value
@@ -68,9 +76,15 @@ CREATE TRIGGER deals_updated_at
     BEFORE UPDATE ON deals
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
--- Migration: if upgrading an existing database, run this to add the bbl column:
+-- Migration: if upgrading an existing database, run these to add new columns:
 --   ALTER TABLE properties ADD COLUMN IF NOT EXISTS bbl TEXT;
 --   CREATE INDEX IF NOT EXISTS idx_properties_bbl ON properties(bbl);
+--   ALTER TABLE properties ADD COLUMN IF NOT EXISTS building_class TEXT;
+--   ALTER TABLE properties ADD COLUMN IF NOT EXISTS block TEXT;
+--   ALTER TABLE properties ADD COLUMN IF NOT EXISTS lot TEXT;
+--   ALTER TABLE properties ADD COLUMN IF NOT EXISTS tax_class_code TEXT;
+--   ALTER TABLE properties ADD COLUMN IF NOT EXISTS lien_cycle TEXT;
+--   ALTER TABLE properties ADD COLUMN IF NOT EXISTS water_debt_only BOOLEAN;
 
 -- Indexes for common filters
 CREATE INDEX IF NOT EXISTS idx_properties_borough ON properties(borough);
