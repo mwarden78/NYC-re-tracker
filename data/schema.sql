@@ -94,6 +94,25 @@ CREATE TABLE IF NOT EXISTS violations (
 );
 CREATE INDEX IF NOT EXISTS idx_violations_property_id ON violations(property_id);
 
+-- Sale history table: ACRIS deed records linked to properties
+CREATE TABLE IF NOT EXISTS sale_history (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    property_id UUID NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+    document_id TEXT NOT NULL,          -- ACRIS 16-char document ID
+    doc_type TEXT,                       -- e.g. 'DEED', 'DEED, RC', 'CONDEED'
+    sale_price NUMERIC,                  -- document_amt from ACRIS Master
+    sale_date DATE,                      -- document_date from ACRIS Master
+    recorded_at TIMESTAMPTZ,             -- recorded_datetime from ACRIS Master
+    seller_name TEXT,                    -- party_type='1' from ACRIS Parties
+    buyer_name TEXT,                     -- party_type='2' from ACRIS Parties
+    percent_transferred NUMERIC,         -- percent_trans from ACRIS Master
+    bbl TEXT,                            -- borough+block+lot used for lookup
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (property_id, document_id)    -- idempotent upserts
+);
+CREATE INDEX IF NOT EXISTS idx_sale_history_property_id ON sale_history(property_id);
+CREATE INDEX IF NOT EXISTS idx_sale_history_sale_date ON sale_history(sale_date DESC);
+
 -- Saved searches table: user-saved filter configurations for deal alerts
 CREATE TABLE IF NOT EXISTS saved_searches (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
