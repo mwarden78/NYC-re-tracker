@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import sys
 import os
+from datetime import datetime, timezone as _tz
 
 import streamlit as st
 
@@ -126,6 +127,89 @@ def load_violation_counts(open_only: bool = False) -> dict[str, int]:
         pid = row["property_id"]
         counts[pid] = counts.get(pid, 0) + 1
     return counts
+
+
+@st.cache_data(ttl=_TTL)
+def load_saved_searches() -> list[dict]:
+    """Return all saved searches, ordered newest first."""
+    client = get_client()
+    result = (
+        client.table("saved_searches")
+        .select("*")
+        .order("created_at", desc=True)
+        .execute()
+    )
+    return result.data or []
+
+
+def save_search(name: str, filters: dict) -> dict:
+    """Insert a saved search and clear the cache."""
+    client = get_client()
+    result = (
+        client.table("saved_searches")
+        .insert({"name": name, "filters": filters})
+        .execute()
+    )
+    st.cache_data.clear()
+    return result.data[0]
+
+
+def delete_saved_search(search_id: str) -> None:
+    """Delete a saved search by ID and clear the cache."""
+    client = get_client()
+    client.table("saved_searches").delete().eq("id", search_id).execute()
+    st.cache_data.clear()
+
+
+def mark_search_checked(search_id: str) -> None:
+    """Update last_checked_at to now for the given saved search."""
+    client = get_client()
+    client.table("saved_searches").update(
+        {"last_checked_at": datetime.now(_tz.utc).isoformat()}
+    ).eq("id", search_id).execute()
+    st.cache_data.clear()
+
+
+def count_new_matches(search: dict, all_properties: list[dict]) -> int:
+    """Count properties that match search filters and were created after last_checked_at."""
+    filters = search.get("filters", {})
+    last_checked = search.get("last_checked_at")
+    if not last_checked:
+        return 0
+    try:
+        lc_dt = datetime.fromisoformat(last_checked.replace("Z", "+00:00"))
+    except Exception:
+        return 0
+
+    count = 0
+    for p in all_properties:
+        created = p.get("created_at")
+        if not created:
+            continue
+        try:
+            p_dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+        except Exception:
+            continue
+        if p_dt <= lc_dt:
+            continue
+
+        if filters.get("boroughs") and p.get("borough") not in filters["boroughs"]:
+            continue
+        if filters.get("deal_types") and p.get("deal_type") not in filters["deal_types"]:
+            continue
+        if filters.get("prop_types") and p.get("property_type") not in filters["prop_types"]:
+            continue
+        price = p.get("price")
+        if filters.get("price_min") is not None and price is not None and price < filters["price_min"]:
+            continue
+        if filters.get("price_max") is not None and price is not None and price > filters["price_max"]:
+            continue
+        if filters.get("min_beds"):
+            beds = p.get("bedrooms")
+            if beds is None or int(beds) < filters["min_beds"]:
+                continue
+        count += 1
+    return count
 
 
 @st.cache_data(ttl=_TTL)

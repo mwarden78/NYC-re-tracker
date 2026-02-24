@@ -77,6 +77,16 @@ CREATE TABLE IF NOT EXISTS violations (
 );
 CREATE INDEX IF NOT EXISTS idx_violations_property_id ON violations(property_id);
 
+-- Saved searches table: user-saved filter configurations for deal alerts
+CREATE TABLE IF NOT EXISTS saved_searches (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name TEXT NOT NULL,
+    filters JSONB NOT NULL DEFAULT '{}',
+    last_checked_at TIMESTAMPTZ DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_saved_searches_created_at ON saved_searches(created_at DESC);
+
 -- Seed a few sample properties for testing
 INSERT INTO properties (address, borough, zip_code, property_type, deal_type, price, sqft, bedrooms, bathrooms, lat, lng, source, listed_at)
 VALUES
