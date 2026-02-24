@@ -146,6 +146,33 @@ with st.sidebar:
             help="Higher = tighter clusters. Lower = broader grouping.",
         )
 
+    st.divider()
+    st.header("Map Bounds Filter")
+    filter_by_bounds = st.toggle(
+        "Filter by map view",
+        value=False,
+        help="Show only properties within the lat/lng bounds below.",
+    )
+    if filter_by_bounds:
+        st.caption("Adjust to match your current map view.")
+        lat_range = st.slider(
+            "Latitude",
+            min_value=40.45, max_value=40.95,
+            value=(40.55, 40.92),
+            step=0.01,
+            format="%.2f",
+        )
+        lng_range = st.slider(
+            "Longitude",
+            min_value=-74.35, max_value=-73.65,
+            value=(-74.25, -73.70),
+            step=0.01,
+            format="%.2f",
+        )
+    else:
+        lat_range = None
+        lng_range = None
+
 # ---------------------------------------------------------------------------
 # Radius search state — geocode on button click, persist in session_state
 # ---------------------------------------------------------------------------
@@ -193,6 +220,10 @@ for p in properties:
         dist = haversine_miles(radius_center[0], radius_center[1], float(lat), float(lng))
         if dist > radius_miles:
             continue
+    if lat_range and not (lat_range[0] <= float(lat) <= lat_range[1]):
+        continue
+    if lng_range and not (lng_range[0] <= float(lng) <= lng_range[1]):
+        continue
 
     deal_type = p.get("deal_type", "")
     idx = len(rows)
@@ -406,6 +437,33 @@ if selected_prop:
 
 
 # ---------------------------------------------------------------------------
+# Bounds-filtered property list
+# ---------------------------------------------------------------------------
+if filter_by_bounds and rows:
+    st.divider()
+    st.subheader(f"Properties in view ({len(rows)})")
+    list_cols = st.columns(3)
+    for i, row in enumerate(rows):
+        prop = prop_by_index[i]
+        pid = prop["id"]
+        price = row.get("price")
+        vcount = violation_counts.get(pid, 0)
+        pipeline_status = tracked.get(pid)
+        with list_cols[i % 3]:
+            with st.container(border=True):
+                icon = DEAL_ICONS.get(row["deal_type"], "⚪")
+                st.markdown(f"**{row['address']}**")
+                st.caption(f"{icon} {row['deal_label']} · {row['borough']}")
+                c1, c2 = st.columns(2)
+                c1.metric("Price", f"${price:,.0f}" if price else "—")
+                c2.metric("Violations", vcount)
+                if pipeline_status:
+                    st.caption(PIPELINE_LABELS.get(pipeline_status, pipeline_status))
+                if st.button("View Details →", key=f"bounds_detail_{pid}", use_container_width=True):
+                    st.query_params["property_id"] = pid
+                    st.switch_page("pages/5_Property_Detail.py")
+
+# ---------------------------------------------------------------------------
 # Legend + summary
 # ---------------------------------------------------------------------------
 st.divider()
@@ -437,6 +495,7 @@ with col_stats:
         cluster_count = len(build_clusters(rows, cluster_precision)[0])
         st.caption(f"**{mapped}** properties in **{cluster_count}** clusters")
     else:
-        st.caption(f"**{mapped}** pins shown · click a pin for details")
+        bounds_note = " · filtered to map bounds" if filter_by_bounds else " · click a pin for details"
+        st.caption(f"**{mapped}** pins shown{bounds_note}")
     if no_coords:
         st.caption(f"*{no_coords} properties skipped (no coordinates)*")
