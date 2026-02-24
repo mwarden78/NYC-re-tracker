@@ -193,6 +193,48 @@ with notes_col:
 st.divider()
 
 # ---------------------------------------------------------------------------
+# Parcel & Market Data (PLUTO + ACRIS enrichment — TES-37)
+# ---------------------------------------------------------------------------
+assessed_value = prop.get("assessed_value")
+market_value = prop.get("market_value")
+num_units = prop.get("num_units")
+num_floors = prop.get("num_floors")
+land_use = prop.get("land_use")
+zoning_district = prop.get("zoning_district")
+last_sale_price = prop.get("last_sale_price")
+last_sale_date = prop.get("last_sale_date")
+bbl = prop.get("bbl")
+
+_has_pluto = any(v is not None for v in [assessed_value, market_value, num_units, num_floors, land_use, zoning_district])
+_has_sale = any(v is not None for v in [last_sale_price, last_sale_date])
+
+with st.expander("🏛 Parcel & Market Data", expanded=_has_pluto or _has_sale):
+    if not _has_pluto and not _has_sale:
+        st.info(
+            "No parcel data yet. Run `python data/backfill_bbl.py` then "
+            "`python data/enrich_pluto.py` and `python data/enrich_last_sale.py` to populate."
+        )
+    else:
+        # Row 1: assessed / market / last sale value metrics
+        p1, p2, p3, p4 = st.columns(4)
+        p1.metric("Assessed Value", f"${assessed_value:,.0f}" if assessed_value else "—")
+        p2.metric("Market Value (DOF)", f"${market_value:,.0f}" if market_value else "—")
+        p3.metric("Last Sale Price", f"${last_sale_price:,.0f}" if last_sale_price else "—")
+        p4.metric("Last Sale Date", last_sale_date[:10] if last_sale_date else "—")
+
+        st.divider()
+
+        # Row 2: parcel details
+        d1, d2, d3, d4, d5 = st.columns(5)
+        d1.markdown(f"**BBL**  \n`{bbl}`" if bbl else "**BBL**  \n—")
+        d2.markdown(f"**Zoning**  \n{zoning_district}" if zoning_district else "**Zoning**  \n—")
+        d3.markdown(f"**Land Use**  \n{land_use}" if land_use else "**Land Use**  \n—")
+        d4.markdown(f"**Units (Res)**  \n{num_units:,}" if num_units is not None else "**Units (Res)**  \n—")
+        d5.markdown(f"**Floors**  \n{num_floors}" if num_floors is not None else "**Floors**  \n—")
+
+st.divider()
+
+# ---------------------------------------------------------------------------
 # Violations
 # ---------------------------------------------------------------------------
 try:
