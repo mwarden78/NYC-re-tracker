@@ -1,4 +1,4 @@
-"""Map View — properties plotted on an interactive NYC map (TES-11, TES-22, TES-23, TES-24)."""
+"""Map View — properties plotted on an interactive NYC map (TES-11, TES-22, TES-23, TES-24, TES-27)."""
 
 from __future__ import annotations
 
@@ -91,7 +91,6 @@ def geocode_nyc(address: str) -> tuple[float, float] | None:
 
 def circle_polygon(lat: float, lng: float, radius_miles: float, points: int = 64) -> list[list[float]]:
     """Return a list of [lng, lat] pairs forming a circle polygon."""
-    # Convert radius from miles to degrees (approximate)
     lat_deg = radius_miles / 69.0
     lng_deg = radius_miles / (69.0 * math.cos(math.radians(lat)))
     ring = []
@@ -99,6 +98,118 @@ def circle_polygon(lat: float, lng: float, radius_miles: float, points: int = 64
         angle = 2 * math.pi * i / points
         ring.append([lng + lng_deg * math.cos(angle), lat + lat_deg * math.sin(angle)])
     return ring
+
+
+# ---------------------------------------------------------------------------
+# MTA subway line colors (standard palette)
+# ---------------------------------------------------------------------------
+_MTA_LINE_COLORS: dict[str, list[int]] = {
+    "A": [40, 80, 173, 210], "C": [40, 80, 173, 210], "E": [40, 80, 173, 210],
+    "B": [255, 99, 25, 210], "D": [255, 99, 25, 210], "F": [255, 99, 25, 210], "M": [255, 99, 25, 210],
+    "G": [108, 190, 69, 210],
+    "J": [153, 102, 51, 210], "Z": [153, 102, 51, 210],
+    "L": [167, 169, 172, 210],
+    "N": [252, 204, 10, 210], "Q": [252, 204, 10, 210], "R": [252, 204, 10, 210], "W": [252, 204, 10, 210],
+    "1": [238, 53, 46, 210], "2": [238, 53, 46, 210], "3": [238, 53, 46, 210],
+    "4": [0, 147, 60, 210], "5": [0, 147, 60, 210], "6": [0, 147, 60, 210],
+    "7": [185, 51, 173, 210],
+    "S": [128, 129, 131, 210],
+}
+_DEFAULT_TRANSIT_COLOR = [128, 129, 131, 210]
+
+
+@st.cache_data(ttl=86400, show_spinner="Loading subway lines…")
+def _load_subway_lines() -> list[dict]:
+    """Fetch NYC subway lines GeoJSON from NYC Open Data (cached 24 h)."""
+    url = "https://data.cityofnewyork.us/api/geospatial/s7zz-qmyz?method=export&type=GeoJSON"
+    resp = requests.get(url, timeout=15)
+    resp.raise_for_status()
+    geojson = resp.json()
+
+    paths = []
+    for feature in geojson.get("features", []):
+        props = feature.get("properties", {})
+        route = (props.get("rt_symbol") or "").strip()
+        color = _MTA_LINE_COLORS.get(route, _DEFAULT_TRANSIT_COLOR)
+        geom = feature.get("geometry", {})
+        geom_type = geom.get("type")
+        coords = geom.get("coordinates", [])
+
+        if geom_type == "LineString":
+            paths.append({"path": coords, "color": color, "route": route})
+        elif geom_type == "MultiLineString":
+            for segment in coords:
+                paths.append({"path": segment, "color": color, "route": route})
+
+    return paths
+
+
+@st.cache_data(ttl=86400, show_spinner="Loading subway stations…")
+def _load_subway_stations() -> list[dict]:
+    """Fetch NYC subway stations from NYC Open Data (cached 24 h)."""
+    url = "https://data.cityofnewyork.us/resource/arq3-7z49.json?$limit=500"
+    resp = requests.get(url, timeout=15)
+    resp.raise_for_status()
+    data = resp.json()
+
+    stations = []
+    for s in data:
+        geom = s.get("the_geom")
+        if isinstance(geom, dict) and geom.get("type") == "Point":
+            lng, lat = geom["coordinates"]
+            stations.append({
+                "lat": float(lat),
+                "lng": float(lng),
+                "name": s.get("name", ""),
+                "line": s.get("line", ""),
+            })
+    return stations
+
+
+def _build_subway_layers() -> list[pdk.Layer]:
+    """Return PathLayer (lines) + ScatterplotLayer (stations), or [] on failure."""
+    try:
+        subway_paths = _load_subway_lines()
+        layers: list[pdk.Layer] = []
+
+        if subway_paths:
+            layers.append(
+                pdk.Layer(
+                    "PathLayer",
+                    data=pd.DataFrame(subway_paths),
+                    get_path="path",
+                    get_color="color",
+                    get_width=12,
+                    width_min_pixels=2,
+                    width_max_pixels=6,
+                    pickable=False,
+                    joint_rounded=True,
+                    cap_rounded=True,
+                )
+            )
+
+        stations = _load_subway_stations()
+        if stations:
+            layers.append(
+                pdk.Layer(
+                    "ScatterplotLayer",
+                    data=pd.DataFrame(stations),
+                    get_position=["lng", "lat"],
+                    get_fill_color=[255, 255, 255, 200],
+                    get_line_color=[80, 80, 80, 255],
+                    stroked=True,
+                    line_width_min_pixels=1,
+                    get_radius=40,
+                    radius_min_pixels=3,
+                    radius_max_pixels=8,
+                    pickable=False,
+                )
+            )
+
+        return layers
+    except Exception as exc:
+        st.sidebar.warning(f"Subway data unavailable: {exc}")
+        return []
 
 
 # ---------------------------------------------------------------------------
@@ -145,6 +256,8 @@ with st.sidebar:
             min_value=1, max_value=4, value=2,
             help="Higher = tighter clusters. Lower = broader grouping.",
         )
+    show_subway = st.toggle("Show subway layer", value=False,
+                            help="Overlay MTA subway lines and stations")
 
     st.divider()
     st.header("Map Bounds Filter")
@@ -375,7 +488,11 @@ if cluster_mode:
     df_clusters = pd.DataFrame(cluster_rows)
     df_labels = pd.DataFrame(label_rows)
 
-    layers = [
+    layers = []
+    if show_subway:
+        layers.extend(_build_subway_layers())
+
+    layers += [
         pdk.Layer("ScatterplotLayer", data=df_clusters, get_position=["lng", "lat"],
                   get_fill_color="color", get_radius="count", radius_scale=120,
                   radius_min_pixels=10, radius_max_pixels=60, pickable=True),
@@ -415,18 +532,20 @@ else:
         pickable=True,
         auto_highlight=True,
     )
-    pin_layers = [heatmap_layer, scatter_layer] if heatmap_layer else [scatter_layer]
     tooltip = {
         "html": "<b>{address}</b><br/>{deal_label} · {borough}<br/>Price: {price_fmt}<br/>Pipeline: {pipeline_fmt}",
         "style": {"backgroundColor": "#1e293b", "color": "white",
                   "fontSize": "13px", "padding": "8px", "borderRadius": "4px"},
     }
 
-    layers = [scatter_layer]
+    layers = []
+    if show_subway:
+        layers.extend(_build_subway_layers())
     if heatmap_layer:
         layers.insert(0, heatmap_layer)  # heatmap at bottom
     if radius_center:
         layers.insert(1 if heatmap_layer else 0, build_radius_layer(radius_center[0], radius_center[1], radius_miles))
+    layers.append(scatter_layer)
 
     deck = pdk.Deck(
         layers=layers,
