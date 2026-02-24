@@ -110,10 +110,17 @@ def load_violations_by_property(property_id: str) -> list[dict]:
 
 
 @st.cache_data(ttl=_TTL)
-def load_violation_counts() -> dict[str, int]:
-    """Return {property_id: violation_count} for all properties with violations."""
+def load_violation_counts(open_only: bool = False) -> dict[str, int]:
+    """Return {property_id: violation_count} for all properties with violations.
+
+    Args:
+        open_only: If True, count only violations with status='Open'.
+    """
     client = get_client()
-    result = client.table("violations").select("property_id").execute()
+    query = client.table("violations").select("property_id")
+    if open_only:
+        query = query.eq("status", "Open")
+    result = query.execute()
     counts: dict[str, int] = {}
     for row in (result.data or []):
         pid = row["property_id"]

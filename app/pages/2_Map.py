@@ -173,6 +173,14 @@ with st.sidebar:
         lat_range = None
         lng_range = None
 
+    show_heatmap = st.toggle("Show violation heatmap", value=False)
+    if show_heatmap:
+        heatmap_mode = st.radio(
+            "Violations to show",
+            options=["All violations", "Open only"],
+            horizontal=True,
+        )
+
 # ---------------------------------------------------------------------------
 # Radius search state — geocode on button click, persist in session_state
 # ---------------------------------------------------------------------------
@@ -286,16 +294,13 @@ def build_clusters(rows: list[dict], precision: int) -> tuple[list[dict], list[d
 # ---------------------------------------------------------------------------
 def build_radius_layer(lat: float, lng: float, miles: float) -> pdk.Layer:
     ring = circle_polygon(lat, lng, miles)
-    df_circle = pd.DataFrame([{
-        "polygon": ring,
-        "center": [lng, lat],
-    }])
+    df_circle = pd.DataFrame([{"polygon": ring, "center": [lng, lat]}])
     return pdk.Layer(
         "PolygonLayer",
         data=df_circle,
         get_polygon="polygon",
-        get_fill_color=[59, 130, 246, 40],   # translucent blue fill
-        get_line_color=[59, 130, 246, 200],   # solid blue border
+        get_fill_color=[59, 130, 246, 40],
+        get_line_color=[59, 130, 246, 200],
         get_line_width=3,
         line_width_min_pixels=2,
         pickable=False,
@@ -305,11 +310,27 @@ def build_radius_layer(lat: float, lng: float, miles: float) -> pdk.Layer:
 
 
 # ---------------------------------------------------------------------------
+# Violation heatmap data
+# ---------------------------------------------------------------------------
+
+def build_heatmap_data(properties: list[dict], open_only: bool) -> list[dict]:
+    """Return [{lat, lng, weight}] for properties that have violations and coordinates."""
+    vcounts = load_violation_counts(open_only=open_only)
+    heat_rows = []
+    for p in properties:
+        lat = p.get("lat")
+        lng = p.get("lng")
+        weight = vcounts.get(p["id"], 0)
+        if lat and lng and weight > 0:
+            heat_rows.append({"lat": float(lat), "lng": float(lng), "weight": weight})
+    return heat_rows
+
+
+# ---------------------------------------------------------------------------
 # Compute initial view — center on radius if active, otherwise NYC default
 # ---------------------------------------------------------------------------
 if radius_center:
     view_lat, view_lng = radius_center
-    # Zoom level based on radius: ~1 mi → 13, ~5 mi → 11
     view_zoom = max(10, 14 - int(radius_miles * 1.2))
 else:
     view_lat, view_lng = 40.7128, -74.0060
@@ -321,6 +342,33 @@ initial_view = pdk.ViewState(latitude=view_lat, longitude=view_lng, zoom=view_zo
 # Build layers + render map
 # ---------------------------------------------------------------------------
 selected_prop = None
+
+# Build heatmap layer if enabled (shared across both pin and cluster modes)
+heatmap_layer = None
+if show_heatmap:
+    open_only = (heatmap_mode == "Open only")
+    heat_rows = build_heatmap_data(properties, open_only=open_only)
+    if heat_rows:
+        heatmap_layer = pdk.Layer(
+            "HeatmapLayer",
+            data=pd.DataFrame(heat_rows),
+            get_position=["lng", "lat"],
+            get_weight="weight",
+            aggregation="SUM",
+            radius_pixels=80,
+            intensity=1,
+            threshold=0.05,
+            color_range=[
+                [0, 0, 255, 0],
+                [0, 255, 255, 80],
+                [0, 255, 0, 120],
+                [255, 255, 0, 160],
+                [255, 128, 0, 200],
+                [255, 0, 0, 230],
+            ],
+        )
+    else:
+        st.sidebar.info("No violations data yet. Run `python data/ingest_violations.py` to populate.")
 
 if cluster_mode:
     cluster_rows, label_rows = build_clusters(rows, cluster_precision)
@@ -335,8 +383,10 @@ if cluster_mode:
                   get_text="label", get_size=14, get_color=[255, 255, 255, 230],
                   get_alignment_baseline="'center'", get_text_anchor="'middle'"),
     ]
+    if heatmap_layer:
+        layers.insert(0, heatmap_layer)  # heatmap at bottom
     if radius_center:
-        layers.insert(0, build_radius_layer(radius_center[0], radius_center[1], radius_miles))
+        layers.insert(1 if heatmap_layer else 0, build_radius_layer(radius_center[0], radius_center[1], radius_miles))
 
     tooltip = {
         "html": "<b>{count} properties</b><br/>{summary}",
@@ -365,6 +415,7 @@ else:
         pickable=True,
         auto_highlight=True,
     )
+    pin_layers = [heatmap_layer, scatter_layer] if heatmap_layer else [scatter_layer]
     tooltip = {
         "html": "<b>{address}</b><br/>{deal_label} · {borough}<br/>Price: {price_fmt}<br/>Pipeline: {pipeline_fmt}",
         "style": {"backgroundColor": "#1e293b", "color": "white",
@@ -372,8 +423,10 @@ else:
     }
 
     layers = [scatter_layer]
+    if heatmap_layer:
+        layers.insert(0, heatmap_layer)  # heatmap at bottom
     if radius_center:
-        layers.insert(0, build_radius_layer(radius_center[0], radius_center[1], radius_miles))
+        layers.insert(1 if heatmap_layer else 0, build_radius_layer(radius_center[0], radius_center[1], radius_miles))
 
     deck = pdk.Deck(
         layers=layers,
@@ -484,6 +537,9 @@ with col_legend:
             f"<span style='color:{hex_color};font-size:18px'>●</span> {label}",
             unsafe_allow_html=True,
         )
+    if show_heatmap and heatmap_layer:
+        mode_label = "open" if (heatmap_mode == "Open only") else "all"
+        st.caption(f"🌡 Heatmap = {mode_label} violation density (blue → red = low → high)")
 
 with col_stats:
     if radius_center:
