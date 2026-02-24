@@ -30,3 +30,16 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+
+# Linting / type checking
+.ruff_cache/
+.mypy_cache/
+
+# Coverage
+.coverage
+coverage.xml
+htmlcov/
+.pytest_cache/
+
+# Logs
+*.log

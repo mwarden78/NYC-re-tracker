@@ -1,0 +1,13 @@
+[extend]
+useDefault = true
+
+[allowlist]
+paths = [
+    '''tests/.*\.py$''',
+    '''test_.*\.py$''',
+]
+
+regexes = [
+    '''test-fake-key.*''',
+    '''lin_api_test.*''',
+]

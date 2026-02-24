@@ -1066,6 +1066,7 @@ git push
 8. **Don't work in the main checkout** - Use worktrees for ticket work.
 9. **Don't leave merged worktrees around** - After a PR is merged, remove the worktree, delete the local branch, and run `bin/vibe doctor`.
 10. **Don't use `cd path && command`** - Use `git -C path`, `npm --prefix path`, or `gh pr create --repo owner/repo` so commands can run without changing directory and can be parallelized when appropriate.
+11. **Don't use multiple worktree systems for the same ticket** - If using `bin/vibe do`, do not also use Claude Code's `isolation: "worktree"` for the same ticket. This creates duplicate branches and duplicate PRs.
 
 ---
 
