@@ -46,3 +46,10 @@ jobs:
       - name: Fail if ingestion errored
         if: steps.ingest.outputs.exit_code != '0'
         run: exit 1
+
+      - name: Enrich new properties with ACRIS deed sales
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          NYC_OPEN_DATA_APP_TOKEN: ${{ secrets.NYC_OPEN_DATA_APP_TOKEN }}
+        run: python data/enrich_last_sale.py
