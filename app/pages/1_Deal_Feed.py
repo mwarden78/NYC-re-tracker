@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import csv
 import io
+import statistics
+from collections import Counter
 from datetime import date, datetime, timezone
 
 import streamlit as st
@@ -154,6 +156,12 @@ DEAL_LABELS = {
     "listing": "Listing",
     "off_market": "Off Market",
 }
+DEAL_COLORS_HEX = {
+    "foreclosure": "#dc2626",
+    "tax_lien": "#ea580c",
+    "listing": "#2563eb",
+    "off_market": "#7c3aed",
+}
 PIPELINE_LABELS = {
     "watching": "👁 Watching",
     "analyzing": "🔍 Analyzing",
@@ -170,6 +178,59 @@ def _days_ago(dt_str: str | None) -> int | None:
         return (datetime.now(timezone.utc) - dt).days
     except Exception:
         return None
+
+
+# ---------------------------------------------------------------------------
+# Sidebar: Neighborhood stats panel (shown when borough filter is active)
+# ---------------------------------------------------------------------------
+if borough_sel:
+    area_label = ", ".join(borough_sel) if len(borough_sel) <= 2 else f"{len(borough_sel)} boroughs"
+
+    with st.sidebar:
+        st.divider()
+        st.header("Area Stats")
+        st.caption(area_label)
+
+        if not filtered:
+            st.caption("*No properties match current filters.*")
+        else:
+            # Deal count
+            st.metric("Properties", len(filtered))
+
+            # Median price
+            prices_f = [p["price"] for p in filtered if p.get("price")]
+            if prices_f:
+                st.metric("Median Price", f"${statistics.median(prices_f):,.0f}")
+            else:
+                st.metric("Median Price", "—")
+
+            # Avg days listed
+            days_f = [d for d in (_days_ago(p.get("listed_at")) for p in filtered) if d is not None]
+            if days_f:
+                avg_days = sum(days_f) / len(days_f)
+                st.metric("Avg Days Listed", f"{avg_days:.0f}d")
+
+            # Deal type breakdown (only when enough data)
+            if len(filtered) >= 3:
+                st.caption("**Deal Type Breakdown**")
+                type_counts = Counter(p.get("deal_type", "unknown") for p in filtered)
+                total_f = len(filtered)
+                for dt, count in type_counts.most_common():
+                    lbl = DEAL_LABELS.get(dt, dt)
+                    pct = count / total_f * 100
+                    color = DEAL_COLORS_HEX.get(dt, "#888")
+                    st.markdown(
+                        f"<div style='margin-bottom:6px'>"
+                        f"<span style='font-size:12px'>{lbl}</span>"
+                        f"<div style='background:#1e293b;border-radius:4px;height:8px;margin-top:2px'>"
+                        f"<div style='background:{color};width:{pct:.0f}%;height:8px;border-radius:4px'></div>"
+                        f"</div>"
+                        f"<span style='font-size:11px;color:#94a3b8'>{count} ({pct:.0f}%)</span>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+            else:
+                st.caption("*Select more properties to see deal type breakdown.*")
 
 
 def _render_card(prop: dict, viol_count: int = 0) -> None:
