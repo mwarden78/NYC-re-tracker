@@ -36,5 +36,5 @@ jobs:
         run: ruff format lib/ bin/ --check --diff
 
       - name: Run mypy type checking
-        run: mypy lib/vibe/ --ignore-missing-imports
+        run: mypy app/ data/ utils/ --ignore-missing-imports
 
