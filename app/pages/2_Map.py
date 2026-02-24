@@ -1,11 +1,13 @@
-"""Map View — properties plotted on an interactive NYC map (TES-11, TES-22, TES-23)."""
+"""Map View — properties plotted on an interactive NYC map (TES-11, TES-22, TES-23, TES-24)."""
 
 from __future__ import annotations
 
+import math
 from collections import Counter
 
 import pandas as pd
 import pydeck as pdk
+import requests
 import streamlit as st
 from db import add_to_pipeline, load_deals, load_properties, load_violation_counts
 
@@ -56,6 +58,50 @@ PIPELINE_LABELS = {
 }
 
 # ---------------------------------------------------------------------------
+# Geo helpers
+# ---------------------------------------------------------------------------
+
+def haversine_miles(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    """Return great-circle distance in miles between two lat/lng points."""
+    R = 3958.8  # Earth radius in miles
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlam = math.radians(lng2 - lng1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlam / 2) ** 2
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def geocode_nyc(address: str) -> tuple[float, float] | None:
+    """Geocode an NYC address using the NYC GeoSearch API. Returns (lat, lng) or None."""
+    try:
+        resp = requests.get(
+            "https://geosearch.planninglabs.nyc/v2/search",
+            params={"text": address, "size": 1},
+            timeout=5,
+        )
+        resp.raise_for_status()
+        features = resp.json().get("features", [])
+        if not features:
+            return None
+        coords = features[0]["geometry"]["coordinates"]  # [lng, lat]
+        return float(coords[1]), float(coords[0])
+    except Exception:
+        return None
+
+
+def circle_polygon(lat: float, lng: float, radius_miles: float, points: int = 64) -> list[list[float]]:
+    """Return a list of [lng, lat] pairs forming a circle polygon."""
+    # Convert radius from miles to degrees (approximate)
+    lat_deg = radius_miles / 69.0
+    lng_deg = radius_miles / (69.0 * math.cos(math.radians(lat)))
+    ring = []
+    for i in range(points + 1):
+        angle = 2 * math.pi * i / points
+        ring.append([lng + lng_deg * math.cos(angle), lat + lat_deg * math.sin(angle)])
+    return ring
+
+
+# ---------------------------------------------------------------------------
 # Sidebar
 # ---------------------------------------------------------------------------
 with st.sidebar:
@@ -77,6 +123,20 @@ with st.sidebar:
     show_tracked_only = st.checkbox("Show tracked properties only", value=False)
 
     st.divider()
+    st.header("Radius Search")
+    radius_address = st.text_input(
+        "Center address",
+        placeholder="e.g. 123 Main St, Brooklyn",
+        help="Enter any NYC address to search within a radius",
+    )
+    radius_miles = st.slider(
+        "Radius (miles)",
+        min_value=0.25, max_value=5.0, value=1.0, step=0.25,
+        disabled=not radius_address,
+    )
+    search_clicked = st.button("Search", disabled=not radius_address, use_container_width=True)
+
+    st.divider()
     st.header("View")
     cluster_mode = st.toggle("Cluster nearby pins", value=False)
     if cluster_mode:
@@ -85,6 +145,30 @@ with st.sidebar:
             min_value=1, max_value=4, value=2,
             help="Higher = tighter clusters. Lower = broader grouping.",
         )
+
+# ---------------------------------------------------------------------------
+# Radius search state — geocode on button click, persist in session_state
+# ---------------------------------------------------------------------------
+if "radius_center" not in st.session_state:
+    st.session_state.radius_center = None  # (lat, lng) or None
+if "radius_address_last" not in st.session_state:
+    st.session_state.radius_address_last = ""
+
+if search_clicked and radius_address:
+    with st.spinner("Geocoding address…"):
+        result = geocode_nyc(radius_address)
+    if result:
+        st.session_state.radius_center = result
+        st.session_state.radius_address_last = radius_address
+    else:
+        st.sidebar.error("Address not found. Try a more specific NYC address.")
+        st.session_state.radius_center = None
+
+# Clear radius center if address was cleared
+if not radius_address and st.session_state.radius_center is not None:
+    st.session_state.radius_center = None
+
+radius_center: tuple[float, float] | None = st.session_state.radius_center
 
 # ---------------------------------------------------------------------------
 # Filter and build base rows
@@ -105,6 +189,10 @@ for p in properties:
         continue
     if show_tracked_only and p["id"] not in tracked:
         continue
+    if radius_center is not None:
+        dist = haversine_miles(radius_center[0], radius_center[1], float(lat), float(lng))
+        if dist > radius_miles:
+            continue
 
     deal_type = p.get("deal_type", "")
     idx = len(rows)
@@ -126,6 +214,8 @@ if not rows:
         st.info("No properties found. Run `python data/ingest_nyc_open_data.py` to populate.")
     elif all(p.get("lat") is None for p in properties):
         st.warning("Properties loaded but none have coordinates. Re-run ingestion without `--no-geocode`.")
+    elif radius_center is not None:
+        st.warning(f"No properties within {radius_miles} mi of that address. Try a larger radius.")
     else:
         st.warning("No properties match your current filters.")
     st.stop()
@@ -161,6 +251,42 @@ def build_clusters(rows: list[dict], precision: int) -> tuple[list[dict], list[d
 
 
 # ---------------------------------------------------------------------------
+# Radius circle layer (shared between cluster and normal modes)
+# ---------------------------------------------------------------------------
+def build_radius_layer(lat: float, lng: float, miles: float) -> pdk.Layer:
+    ring = circle_polygon(lat, lng, miles)
+    df_circle = pd.DataFrame([{
+        "polygon": ring,
+        "center": [lng, lat],
+    }])
+    return pdk.Layer(
+        "PolygonLayer",
+        data=df_circle,
+        get_polygon="polygon",
+        get_fill_color=[59, 130, 246, 40],   # translucent blue fill
+        get_line_color=[59, 130, 246, 200],   # solid blue border
+        get_line_width=3,
+        line_width_min_pixels=2,
+        pickable=False,
+        stroked=True,
+        filled=True,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Compute initial view — center on radius if active, otherwise NYC default
+# ---------------------------------------------------------------------------
+if radius_center:
+    view_lat, view_lng = radius_center
+    # Zoom level based on radius: ~1 mi → 13, ~5 mi → 11
+    view_zoom = max(10, 14 - int(radius_miles * 1.2))
+else:
+    view_lat, view_lng = 40.7128, -74.0060
+    view_zoom = 10
+
+initial_view = pdk.ViewState(latitude=view_lat, longitude=view_lng, zoom=view_zoom)
+
+# ---------------------------------------------------------------------------
 # Build layers + render map
 # ---------------------------------------------------------------------------
 selected_prop = None
@@ -178,14 +304,16 @@ if cluster_mode:
                   get_text="label", get_size=14, get_color=[255, 255, 255, 230],
                   get_alignment_baseline="'center'", get_text_anchor="'middle'"),
     ]
+    if radius_center:
+        layers.insert(0, build_radius_layer(radius_center[0], radius_center[1], radius_miles))
+
     tooltip = {
         "html": "<b>{count} properties</b><br/>{summary}",
         "style": {"backgroundColor": "#1e293b", "color": "white",
                   "fontSize": "13px", "padding": "8px", "borderRadius": "4px"},
     }
-    st.pydeck_chart(pdk.Deck(layers=layers,
-        initial_view_state=pdk.ViewState(latitude=40.7128, longitude=-74.0060, zoom=10),
-        tooltip=tooltip, map_style="mapbox://styles/mapbox/dark-v10"))
+    st.pydeck_chart(pdk.Deck(layers=layers, initial_view_state=initial_view,
+                              tooltip=tooltip, map_style="mapbox://styles/mapbox/dark-v10"))
 
 else:
     df = pd.DataFrame([{
@@ -211,9 +339,14 @@ else:
         "style": {"backgroundColor": "#1e293b", "color": "white",
                   "fontSize": "13px", "padding": "8px", "borderRadius": "4px"},
     }
+
+    layers = [scatter_layer]
+    if radius_center:
+        layers.insert(0, build_radius_layer(radius_center[0], radius_center[1], radius_miles))
+
     deck = pdk.Deck(
-        layers=[scatter_layer],
-        initial_view_state=pdk.ViewState(latitude=40.7128, longitude=-74.0060, zoom=10),
+        layers=layers,
+        initial_view_state=initial_view,
         tooltip=tooltip,
         map_style="mapbox://styles/mapbox/dark-v10",
     )
@@ -295,7 +428,12 @@ with col_legend:
         )
 
 with col_stats:
-    if cluster_mode:
+    if radius_center:
+        st.caption(
+            f"**{mapped}** properties within **{radius_miles} mi** of "
+            f"_{st.session_state.radius_address_last}_"
+        )
+    elif cluster_mode:
         cluster_count = len(build_clusters(rows, cluster_precision)[0])
         st.caption(f"**{mapped}** properties in **{cluster_count}** clusters")
     else:
