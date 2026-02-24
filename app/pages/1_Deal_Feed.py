@@ -1,4 +1,4 @@
-"""Deal Feed — filterable list of property cards (TES-9/TES-10/TES-29)."""
+"""Deal Feed — filterable list of property cards (TES-9/TES-10/TES-29/TES-31)."""
 
 from __future__ import annotations
 
@@ -9,7 +9,16 @@ from collections import Counter
 from datetime import date, datetime, timezone
 
 import streamlit as st
-from db import add_to_pipeline, load_deals, load_properties, load_violation_counts
+from db import (
+    add_to_pipeline,
+    count_new_matches,
+    load_deals,
+    load_properties,
+    load_saved_searches,
+    load_violation_counts,
+    mark_search_checked,
+    save_search,
+)
 
 st.set_page_config(page_title="Deal Feed | NYC RE Tracker", page_icon="🏠", layout="wide")
 
@@ -26,6 +35,11 @@ try:
 except Exception as e:
     st.error(f"Could not load data from Supabase. Check your `.env` file. ({e})")
     st.stop()
+
+try:
+    saved_searches = load_saved_searches()
+except Exception:
+    saved_searches = []
 
 tracked: dict[str, str] = {d["property_id"]: d["status"] for d in deals}
 
@@ -100,6 +114,27 @@ with st.sidebar:
     # Reset button
     if st.button("Reset Filters", use_container_width=True):
         st.rerun()
+
+    st.divider()
+    with st.expander("💾 Save this search"):
+        _search_name = st.text_input(
+            "Name", placeholder="e.g. BK Foreclosures under $1M", key="_save_search_name"
+        )
+        if st.button("Save Search", use_container_width=True, disabled=not _search_name.strip()):
+            _filters = {
+                "boroughs": borough_sel,
+                "deal_types": [DEAL_TYPE_OPTIONS[k] for k in deal_type_sel],
+                "prop_types": [PROP_TYPE_OPTIONS[k] for k in prop_type_sel],
+                "price_min": int(price_range[0]) if price_range else None,
+                "price_max": int(price_range[1]) if price_range else None,
+                "min_beds": int(min_beds[0]) if min_beds != "Any" else None,
+                "hide_tracked": hide_tracked,
+            }
+            try:
+                save_search(_search_name.strip(), _filters)
+                st.success("Saved! You'll be alerted when new matches appear.")
+            except Exception as _exc:
+                st.error(f"Failed to save: {_exc}")
 
 # ---------------------------------------------------------------------------
 # Apply filters client-side
@@ -322,6 +357,28 @@ def _build_csv(props: list[dict]) -> str:
         })
     return buf.getvalue()
 
+
+# ---------------------------------------------------------------------------
+# New match alerts banner
+# ---------------------------------------------------------------------------
+if saved_searches:
+    _alerts = [
+        (s["name"], count_new_matches(s, all_properties), s["id"])
+        for s in saved_searches
+    ]
+    _alerts = [(name, n, sid) for name, n, sid in _alerts if n > 0]
+    if _alerts:
+        _total_new = sum(n for _, n, _ in _alerts)
+        _names = ", ".join(f'"{name}"' for name, _, _ in _alerts[:3])
+        if len(_alerts) > 3:
+            _names += f" and {len(_alerts) - 3} more"
+        _col_msg, _col_link = st.columns([5, 1])
+        _col_msg.info(
+            f"🔔 **{_total_new} new {'match' if _total_new == 1 else 'matches'}** "
+            f"for your saved searches: {_names}"
+        )
+        with _col_link:
+            st.page_link("pages/6_Alerts.py", label="View Alerts →")
 
 # ---------------------------------------------------------------------------
 # Property grid
