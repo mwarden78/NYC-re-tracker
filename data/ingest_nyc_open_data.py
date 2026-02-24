@@ -1,4 +1,4 @@
-"""NYC Open Data ingestion script — TES-7.
+"""NYC Open Data ingestion script — TES-7, TES-38.
 
 Fetches foreclosure judgment and tax lien data from NYC Open Data
 (Socrata SODA API) and upserts into the Supabase `properties` table.
@@ -19,6 +19,7 @@ Usage:
   python data/ingest_nyc_open_data.py --source foreclosure
   python data/ingest_nyc_open_data.py --source tax_lien
   python data/ingest_nyc_open_data.py --limit 50    # cap records per source
+  python data/ingest_nyc_open_data.py --lookback 24 # months of history (default 13)
 """
 
 from __future__ import annotations
@@ -26,8 +27,10 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import re
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import requests
@@ -75,6 +78,95 @@ BOROUGH_MAP: dict[str, str] = {
     "QUEENS": "Queens",
     "STATEN ISLAND": "Staten Island",
 }
+
+# Deal type priority for cross-source merge (lower index = higher priority)
+DEAL_TYPE_PRIORITY = ["foreclosure", "tax_lien", "listing", "off_market"]
+
+# ---------------------------------------------------------------------------
+# Address normalization
+# ---------------------------------------------------------------------------
+
+# Street suffix → USPS standard abbreviation
+# Normalizing TO abbreviations so "123 Main Street" and "123 Main St" both
+# become "123 Main St" and hash to the same dedup key.
+_STREET_SUFFIX_MAP: dict[str, str] = {
+    "ALLEE": "ALY", "ALLEY": "ALY", "ALLY": "ALY",
+    "ANEX": "ANX", "ANNEX": "ANX",
+    "ARCADE": "ARC",
+    "AVENUE": "AVE", "AVEN": "AVE", "AVENU": "AVE", "AVN": "AVE", "AVNUE": "AVE",
+    "BOULEVARD": "BLVD", "BOULV": "BLVD", "BOUL": "BLVD",
+    "BRANCH": "BR",
+    "BRIDGE": "BRG",
+    "CIRCLE": "CIR", "CIRC": "CIR", "CIRCL": "CIR", "CRCL": "CIR", "CRCLE": "CIR",
+    "COURT": "CT", "CRT": "CT",
+    "COURTS": "CTS",
+    "CROSSING": "XING",
+    "DRIVE": "DR", "DRIV": "DR", "DRV": "DR",
+    "EXPRESSWAY": "EXPY", "EXPRESS": "EXPY", "EXPWAY": "EXPY",
+    "EXTENSION": "EXT", "EXTN": "EXT", "EXTNSN": "EXT",
+    "FREEWAY": "FWY", "FREEWY": "FWY", "FRWAY": "FWY", "FRWY": "FWY",
+    "HIGHWAY": "HWY", "HIGHWY": "HWY", "HIWAY": "HWY", "HIWY": "HWY", "HWAY": "HWY",
+    "JUNCTION": "JCT", "JCTION": "JCT", "JCTN": "JCT",
+    "LANE": "LN",
+    "PARKWAY": "PKWY", "PARKWY": "PKWY", "PKWAY": "PKWY", "PWY": "PKWY",
+    "PLACE": "PL",
+    "PLAZA": "PLZ",
+    "POINT": "PT",
+    "ROAD": "RD", "ROADS": "RDS",
+    "ROUTE": "RTE",
+    "SQUARE": "SQ",
+    "STATION": "STA",
+    "STREET": "ST", "STRT": "ST", "STR": "ST",
+    "TERRACE": "TER", "TERR": "TER",
+    "TRAIL": "TRL", "TRAILS": "TRLS",
+    "TURNPIKE": "TPKE", "TRNPK": "TPKE", "TURNPK": "TPKE",
+    "VALLEY": "VLY",
+    "VILLAGE": "VLG",
+    "WALK": "WALK",
+    "WAY": "WAY",
+}
+
+# Directional words → abbreviation
+_DIRECTIONAL_MAP: dict[str, str] = {
+    "NORTH": "N", "SOUTH": "S", "EAST": "E", "WEST": "W",
+    "NORTHEAST": "NE", "NORTHWEST": "NW", "SOUTHEAST": "SE", "SOUTHWEST": "SW",
+}
+
+# Unit designator variants → canonical "APT"
+_UNIT_PREFIX_RE = re.compile(
+    r"\b(APARTMENT|SUITE|STE|UNIT|NO\.?|NUM\.?|#)\s*",
+    re.IGNORECASE,
+)
+
+
+def normalize_address(raw: str) -> str:
+    """Return a canonical address string for deduplication and storage.
+
+    Steps:
+    1. Collapse whitespace; uppercase for processing
+    2. Normalize unit designators (Apartment/Suite/Unit/# → Apt)
+    3. Abbreviate street suffixes (Street → St, Avenue → Ave, etc.)
+    4. Abbreviate directionals (North → N, etc.)
+    5. Title-case the result for display
+    """
+    if not raw:
+        return raw
+
+    addr = " ".join(raw.strip().split()).upper()
+
+    # Normalize unit designators to "APT"
+    addr = _UNIT_PREFIX_RE.sub("APT ", addr)
+    # Collapse any double spaces introduced above
+    addr = " ".join(addr.split())
+
+    tokens = addr.split()
+    normalized = []
+    for tok in tokens:
+        clean = tok.rstrip(".,")
+        mapped = _STREET_SUFFIX_MAP.get(clean) or _DIRECTIONAL_MAP.get(clean)
+        normalized.append(mapped if mapped else clean)
+
+    return " ".join(normalized).title()
 
 
 # ---------------------------------------------------------------------------
@@ -176,27 +268,31 @@ def normalize_borough(raw: str) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
-# Foreclosure ingestion (ACRIS Lis Pendens)
+# Rolling date window helper
 # ---------------------------------------------------------------------------
 
-def fetch_foreclosures(limit: Optional[int] = None) -> list[dict]:
+def _lookback_date(months: int) -> str:
+    """Return an ISO datetime string `months` months in the past."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=months * 30)
+    return cutoff.strftime("%Y-%m-%dT00:00:00.000")
+
+
+# ---------------------------------------------------------------------------
+# Foreclosure ingestion (ACRIS)
+# ---------------------------------------------------------------------------
+
+def fetch_foreclosures(limit: Optional[int] = None, lookback_months: int = 13) -> list[dict]:
+    """Fetch foreclosure judgment records from ACRIS.
+
+    Uses a rolling lookback window instead of a hardcoded cutoff date so
+    daily runs stay current without needing code changes.
     """
-    Fetch foreclosure judgment records from ACRIS.
+    since = _lookback_date(lookback_months)
+    log.info("Fetching foreclosure JUDG records since %s...", since)
 
-    Uses doc_type=JUDG (court judgments recorded against properties),
-    which includes foreclosure judgments filed with the NYC Register.
-    Note: lis pendens are filed with County Clerks, not ACRIS, so JUDG
-    is the closest available foreclosure signal in this dataset.
-
-    Step 1: Pull recent JUDG documents from the Master table.
-    Step 2: Look up the property address in the Legals table.
-    """
-    log.info("Fetching foreclosure judgment records from ACRIS master...")
-
-    # Fetch master records where doc_type = 'JUDG', last 12 months
     master_rows = soda_get_all(
         ACRIS_MASTER_ID,
-        where="doc_type='JUDG' AND recorded_datetime > '2024-01-01T00:00:00.000'",
+        where=f"doc_type='JUDG' AND recorded_datetime > '{since}'",
         select="document_id,doc_type,document_date,document_amt,recorded_datetime",
         limit=limit,
     )
@@ -204,11 +300,9 @@ def fetch_foreclosures(limit: Optional[int] = None) -> list[dict]:
     if not master_rows:
         return []
 
-    # Build a lookup by document_id for quick merging
     master_by_id: dict[str, dict] = {r["document_id"]: r for r in master_rows}
     doc_ids = list(master_by_id.keys())
 
-    # Fetch legals for those document IDs (batch in chunks to stay within URL length)
     legals: list[dict] = []
     chunk_size = 50
     for i in range(0, len(doc_ids), chunk_size):
@@ -224,9 +318,8 @@ def fetch_foreclosures(limit: Optional[int] = None) -> list[dict]:
 
     log.info("  got %d legal records", len(legals))
 
-    # Merge and map to our properties schema
     properties: list[dict] = []
-    seen_addresses: set[str] = set()
+    seen: set[str] = set()
 
     for legal in legals:
         doc_id = legal.get("document_id")
@@ -242,19 +335,19 @@ def fetch_foreclosures(limit: Optional[int] = None) -> list[dict]:
         if not street_num or not street_name:
             continue
 
-        address = f"{street_num} {street_name}".title()
+        raw_address = f"{street_num} {street_name}"
         unit = (legal.get("unit") or "").strip()
         if unit:
-            address += f" #{unit}"
+            raw_address += f" Apt {unit}"
 
+        address = normalize_address(raw_address)
         dedup_key = f"{address}|{borough}"
-        if dedup_key in seen_addresses:
+        if dedup_key in seen:
             continue
-        seen_addresses.add(dedup_key)
+        seen.add(dedup_key)
 
         price_raw = master.get("document_amt")
         price = float(price_raw) if price_raw else None
-
         listed_at = master.get("document_date") or master.get("recorded_datetime")
 
         properties.append({
@@ -276,18 +369,18 @@ def fetch_foreclosures(limit: Optional[int] = None) -> list[dict]:
 # Tax lien ingestion (DOF Tax Lien Sale List)
 # ---------------------------------------------------------------------------
 
-def fetch_tax_liens(limit: Optional[int] = None) -> list[dict]:
-    """
-    Fetch tax lien sale properties from the DOF Tax Lien Sale Lists dataset.
+def fetch_tax_liens(limit: Optional[int] = None, lookback_months: int = 13) -> list[dict]:
+    """Fetch tax lien sale properties from the DOF Tax Lien Sale Lists dataset.
 
-    Dataset 9rz4-mjek fields: house_number, street_name, borough (1-5),
-    zip_code, block, lot, month (date), cycle, building_class.
+    Filters by a rolling date window on the `month` field so daily runs
+    only re-fetch recent records instead of the entire historical dataset.
     """
-    log.info("Fetching tax lien sale records from DOF...")
+    since = _lookback_date(lookback_months)
+    log.info("Fetching tax lien records since %s...", since)
 
     rows = soda_get_all(
         TAX_LIEN_DATASET_ID,
-        where="month IS NOT NULL",
+        where=f"month > '{since}'",
         select="borough,block,lot,house_number,street_name,zip_code,month,building_class",
         limit=limit,
     )
@@ -307,10 +400,11 @@ def fetch_tax_liens(limit: Optional[int] = None) -> list[dict]:
         if not house_num or not street:
             block = row.get("block", "")
             lot = row.get("lot", "")
-            address = f"Block {block} Lot {lot}".title()
+            raw_address = f"Block {block} Lot {lot}"
         else:
-            address = f"{house_num} {street}".title()
+            raw_address = f"{house_num} {street}"
 
+        address = normalize_address(raw_address)
         zip_code = (row.get("zip_code") or "").strip()
 
         dedup_key = f"{address}|{borough}"
@@ -331,6 +425,68 @@ def fetch_tax_liens(limit: Optional[int] = None) -> list[dict]:
 
     log.info("  mapped %d unique tax lien properties", len(properties))
     return properties
+
+
+# ---------------------------------------------------------------------------
+# Cross-source rollup
+# ---------------------------------------------------------------------------
+
+def merge_properties(properties: list[dict]) -> list[dict]:
+    """Merge records from multiple sources that share the same address+borough.
+
+    When the same normalized address appears in more than one source:
+    - deal_type: highest priority wins (foreclosure > tax_lien > listing > off_market)
+    - price: first non-None value across sources
+    - listed_at: most recent non-None value
+    - zip_code, other fields: first non-None value
+    """
+    buckets: dict[str, list[dict]] = {}
+    for p in properties:
+        key = f"{p['address']}|{p['borough']}"
+        buckets.setdefault(key, []).append(p)
+
+    merged: list[dict] = []
+    cross_source_count = 0
+
+    for key, group in buckets.items():
+        if len(group) == 1:
+            merged.append(group[0])
+            continue
+
+        cross_source_count += 1
+        source_types = [p["deal_type"] for p in group]
+        log.info("  cross-source merge: %s (%s)", key, " + ".join(source_types))
+
+        # Highest-priority deal_type
+        best_deal_type = min(
+            source_types,
+            key=lambda dt: DEAL_TYPE_PRIORITY.index(dt) if dt in DEAL_TYPE_PRIORITY else 99,
+        )
+
+        base = dict(group[0])
+        base["deal_type"] = best_deal_type
+
+        for p in group[1:]:
+            if base.get("price") is None:
+                base["price"] = p.get("price")
+            if base.get("zip_code") is None:
+                base["zip_code"] = p.get("zip_code")
+            # Keep most recent listed_at
+            if p.get("listed_at") and base.get("listed_at"):
+                if p["listed_at"] > base["listed_at"]:
+                    base["listed_at"] = p["listed_at"]
+            elif p.get("listed_at"):
+                base["listed_at"] = p["listed_at"]
+
+        merged.append(base)
+
+    if cross_source_count:
+        log.info(
+            "Cross-source merges: %d (reduced %d → %d records)",
+            cross_source_count, len(properties), len(merged),
+        )
+
+    return merged
 
 
 # ---------------------------------------------------------------------------
@@ -366,7 +522,6 @@ def upsert_properties(properties: list[dict], dry_run: bool = False) -> int:
         log.info("No properties to upsert.")
         return 0
 
-    # Strip internal-only keys and keep only schema columns
     rows = [{col: p.get(col) for col in UPSERT_COLUMNS} for p in properties]
 
     if dry_run:
@@ -423,6 +578,13 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip geocoding (faster, lat/lng will be null)",
     )
+    parser.add_argument(
+        "--lookback",
+        type=int,
+        default=13,
+        metavar="MONTHS",
+        help="Months of history to fetch per source (default: 13)",
+    )
     return parser.parse_args()
 
 
@@ -431,16 +593,23 @@ def main() -> None:
     all_properties: list[dict] = []
 
     if args.source in ("foreclosure", "all"):
-        all_properties.extend(fetch_foreclosures(limit=args.limit))
+        all_properties.extend(
+            fetch_foreclosures(limit=args.limit, lookback_months=args.lookback)
+        )
 
     if args.source in ("tax_lien", "all"):
-        all_properties.extend(fetch_tax_liens(limit=args.limit))
+        all_properties.extend(
+            fetch_tax_liens(limit=args.limit, lookback_months=args.lookback)
+        )
 
     if not all_properties:
         log.info("No properties fetched. Exiting.")
         return
 
-    log.info("Total properties fetched: %d", len(all_properties))
+    log.info("Total properties fetched before merge: %d", len(all_properties))
+
+    all_properties = merge_properties(all_properties)
+    log.info("Total properties after merge: %d", len(all_properties))
 
     if not args.no_geocode:
         add_coordinates(all_properties)
