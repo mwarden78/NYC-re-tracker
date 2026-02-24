@@ -1,4 +1,4 @@
-"""NYC Open Data ingestion script — TES-7, TES-33, TES-38.
+"""NYC Open Data ingestion script — TES-7, TES-33, TES-38, TES-42.
 
 Fetches foreclosure judgment and tax lien data from NYC Open Data
 (Socrata SODA API) and upserts into the Supabase `properties` table.
@@ -263,7 +263,7 @@ def extract_bbl_from_feature(feature: dict) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 GEOSEARCH_URL = "https://geosearch.planninglabs.nyc/v2/search"
-_geocache: dict[str, tuple[Optional[float], Optional[float]]] = {}
+_geocache: dict[str, tuple[Optional[float], Optional[float], Optional[str]]] = {}
 
 
 def geosearch_feature(address: str, borough: str) -> Optional[dict]:
@@ -292,11 +292,15 @@ def geosearch_feature(address: str, borough: str) -> Optional[dict]:
     return None
 
 
-def geocode_address(address: str, borough: str) -> tuple[Optional[float], Optional[float]]:
-    """Return (lat, lng) for a NYC address using the NYC GeoSearch API.
+def geocode_address(address: str, borough: str) -> tuple[Optional[float], Optional[float], Optional[str]]:
+    """Return (lat, lng, bbl) for a NYC address using the NYC GeoSearch API.
+
+    BBL is the 10-digit Borough-Block-Lot parcel identifier returned by the
+    GeoSearch API at features[0].properties.addendum.pad.bbl. It is needed
+    for ACRIS deed sale lookups (TES-42/TES-44).
 
     Free, no API key required, optimised for NYC addresses.
-    Returns (None, None) on any failure without raising.
+    Returns (None, None, None) on any failure without raising.
     """
     cache_key = f"{address}|{borough}"
     if cache_key in _geocache:
@@ -305,9 +309,10 @@ def geocode_address(address: str, borough: str) -> tuple[Optional[float], Option
     feature = geosearch_feature(address, borough)
     if feature:
         lng, lat = feature["geometry"]["coordinates"]
-        result = (float(lat), float(lng))
+        bbl = feature["properties"].get("addendum", {}).get("pad", {}).get("bbl")
+        result = (float(lat), float(lng), bbl or None)
     else:
-        result = (None, None)
+        result = (None, None, None)
 
     _geocache[cache_key] = result
     return result
@@ -553,28 +558,15 @@ def merge_properties(properties: list[dict]) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def add_coordinates(properties: list[dict]) -> None:
-    """Geocode properties with _needs_geocode=True.
-
-    Also extracts BBL from the GeoSearch response — this is more reliable
-    than the ACRIS-constructed BBL and will overwrite it when available.
-    """
+    """Geocode any properties that have _needs_geocode=True, storing lat/lng/bbl."""
     needs_geocode = [p for p in properties if p.pop("_needs_geocode", False)]
     log.info("Geocoding %d properties (this may take a moment)...", len(needs_geocode))
 
     for i, prop in enumerate(needs_geocode):
-        feature = geosearch_feature(prop["address"], prop["borough"])
-        if feature:
-            lng, lat = feature["geometry"]["coordinates"]
-            prop["lat"] = float(lat)
-            prop["lng"] = float(lng)
-            # Prefer GeoSearch BBL over ACRIS-constructed BBL — more reliable
-            geo_bbl = extract_bbl_from_feature(feature)
-            if geo_bbl:
-                prop["bbl"] = geo_bbl
-        else:
-            prop["lat"] = None
-            prop["lng"] = None
-
+        lat, lng, bbl = geocode_address(prop["address"], prop["borough"])
+        prop["lat"] = lat
+        prop["lng"] = lng
+        prop["bbl"] = bbl
         if (i + 1) % 10 == 0:
             log.info("  geocoded %d/%d", i + 1, len(needs_geocode))
 
@@ -585,7 +577,7 @@ def add_coordinates(properties: list[dict]) -> None:
 
 UPSERT_COLUMNS = [
     "address", "borough", "zip_code", "deal_type", "price",
-    "source", "source_url", "lat", "lng", "listed_at", "bbl",
+    "source", "source_url", "lat", "lng", "bbl", "listed_at",
 ]
 
 
