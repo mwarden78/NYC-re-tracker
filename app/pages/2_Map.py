@@ -511,7 +511,7 @@ if cluster_mode:
                   "fontSize": "13px", "padding": "8px", "borderRadius": "4px"},
     }
     st.pydeck_chart(pdk.Deck(layers=layers, initial_view_state=initial_view,
-                              tooltip=tooltip, map_style="mapbox://styles/mapbox/dark-v10"))
+                              tooltip=tooltip, map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json"))
 
 else:
     df = pd.DataFrame([{
@@ -551,7 +551,7 @@ else:
         layers=layers,
         initial_view_state=initial_view,
         tooltip=tooltip,
-        map_style="mapbox://styles/mapbox/dark-v10",
+        map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
     )
 
     try:

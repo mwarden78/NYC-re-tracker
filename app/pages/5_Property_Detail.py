@@ -147,7 +147,7 @@ with map_col:
                 layers=[layer],
                 initial_view_state=view,
                 tooltip={"html": "<b>{address}</b>", "style": {"color": "white"}},
-                map_style="mapbox://styles/mapbox/dark-v10",
+                map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
             )
         )
     else:
