@@ -68,6 +68,10 @@ CREATE TRIGGER deals_updated_at
     BEFORE UPDATE ON deals
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
+-- Migration: if upgrading an existing database, run this to add the bbl column:
+--   ALTER TABLE properties ADD COLUMN IF NOT EXISTS bbl TEXT;
+--   CREATE INDEX IF NOT EXISTS idx_properties_bbl ON properties(bbl);
+
 -- Indexes for common filters
 CREATE INDEX IF NOT EXISTS idx_properties_borough ON properties(borough);
 CREATE INDEX IF NOT EXISTS idx_properties_deal_type ON properties(deal_type);
