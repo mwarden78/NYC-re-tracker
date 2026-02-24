@@ -249,6 +249,14 @@ with st.sidebar:
 
     st.divider()
     st.header("View")
+    MAP_STYLES = {
+        "Dark": "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
+        "Light": "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
+        "Voyager": "https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json",
+    }
+    map_style_name = st.radio("Map style", list(MAP_STYLES.keys()), horizontal=True)
+    map_style = MAP_STYLES[map_style_name]
+
     cluster_mode = st.toggle("Cluster nearby pins", value=False)
     if cluster_mode:
         cluster_precision = st.slider(
@@ -511,7 +519,7 @@ if cluster_mode:
                   "fontSize": "13px", "padding": "8px", "borderRadius": "4px"},
     }
     st.pydeck_chart(pdk.Deck(layers=layers, initial_view_state=initial_view,
-                              tooltip=tooltip, map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json"))
+                              tooltip=tooltip, map_style=map_style))
 
 else:
     df = pd.DataFrame([{
@@ -551,7 +559,7 @@ else:
         layers=layers,
         initial_view_state=initial_view,
         tooltip=tooltip,
-        map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
+        map_style=map_style,
     )
 
     try:
