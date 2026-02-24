@@ -1,8 +1,10 @@
-"""Deal Feed — filterable list of property cards (TES-9/TES-10)."""
+"""Deal Feed — filterable list of property cards (TES-9/TES-10/TES-29)."""
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import csv
+import io
+from datetime import date, datetime, timezone
 
 import streamlit as st
 from db import add_to_pipeline, load_deals, load_properties, load_violation_counts
@@ -236,6 +238,31 @@ def _render_card(prop: dict, viol_count: int = 0) -> None:
 
 
 # ---------------------------------------------------------------------------
+# CSV export helper
+# ---------------------------------------------------------------------------
+_CSV_COLUMNS = ["address", "borough", "zip_code", "deal_type", "price",
+                "listed_at", "pipeline_status", "source_url"]
+
+
+def _build_csv(props: list[dict]) -> str:
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=_CSV_COLUMNS, extrasaction="ignore")
+    writer.writeheader()
+    for p in props:
+        writer.writerow({
+            "address": p.get("address", ""),
+            "borough": p.get("borough", ""),
+            "zip_code": p.get("zip_code", ""),
+            "deal_type": p.get("deal_type", ""),
+            "price": p.get("price", ""),
+            "listed_at": p.get("listed_at", ""),
+            "pipeline_status": tracked.get(p["id"], ""),
+            "source_url": p.get("source_url", ""),
+        })
+    return buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
 # Property grid
 # ---------------------------------------------------------------------------
 total = len(all_properties)
@@ -253,7 +280,16 @@ else:
     label = f"{shown} propert{'y' if shown == 1 else 'ies'}"
     if shown < total:
         label += f" (filtered from {total})"
-    st.caption(label)
+
+    header_col, export_col = st.columns([3, 1])
+    header_col.caption(label)
+    export_col.download_button(
+        label="⬇ Export CSV",
+        data=_build_csv(filtered),
+        file_name=f"nyc-deals-{date.today()}.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
 
     cols = st.columns(3)
     for i, prop in enumerate(filtered):
