@@ -7,14 +7,14 @@ properties.last_sale_date with the most recent arms-length sale.
 
 ACRIS datasets used:
   Real Property Legals:  8h5j-fqxa  — bbl → document_id pairs
-  Real Property Master:  bnx9-e6tj  — document_id → price, date, doc_type
+  Real Property Master:  bnx9-e6tj  — document_id → document_amt, date, doc_type
   Real Property Parties: 636b-3b5g  — document_id → seller/buyer names
 
 Arms-length deed types (sale_price > $10,000):
   DEED, DEED, RC, DEEDP, DEEDO, CONDEED, REIT, ASTU
 
-BBLs are queried in batches of 100 via Socrata `bbl IN (...)` so we never
-download the full ACRIS dataset.
+BBLs are queried in batches of 100 via ACRIS Legals using a compound
+OR filter on (borough, block, lot) — the Legals dataset has no bbl column.
 
 Usage:
   python data/enrich_last_sale.py               # process all unprocessed properties
@@ -100,21 +100,53 @@ def _soda_get(dataset_id: str, params: dict) -> list[dict]:
 # ACRIS API fetchers
 # ---------------------------------------------------------------------------
 
+def _bbl_to_components(bbl: str) -> tuple[str, str, str]:
+    """Decompose a 10-digit BBL into (borough, block, lot) for ACRIS Legals.
+
+    ACRIS Legals stores borough/block/lot as separate columns (no bbl column).
+    BBL format: B(1) + BLOCK(5,zero-padded) + LOT(4,zero-padded)
+    ACRIS stores block/lot without leading zeros, e.g. block='275', lot='22'.
+    """
+    borough = bbl[0]
+    block = str(int(bbl[1:6]))
+    lot = str(int(bbl[6:10]))
+    return borough, block, lot
+
+
 def fetch_document_ids_for_bbls(bbls: list[str]) -> list[dict]:
-    """Step 1: get (document_id, bbl) pairs from ACRIS Legals for a batch of BBLs."""
-    quoted = ", ".join(f"'{b}'" for b in bbls)
+    """Step 1: get (document_id, borough, block, lot) from ACRIS Legals.
+
+    ACRIS Legals (8h5j-fqxa) has no bbl column — it stores borough, block,
+    and lot separately.  We build a compound OR filter from the decomposed BBL
+    components.  Callers reconstruct the original BBL from the returned
+    borough/block/lot values.
+    """
+    parts = []
+    for bbl in bbls:
+        try:
+            borough, block, lot = _bbl_to_components(bbl)
+            parts.append(f"(borough='{borough}' AND block='{block}' AND lot='{lot}')")
+        except (ValueError, IndexError):
+            continue
+    if not parts:
+        return []
     return _soda_get(ACRIS_LEGALS_ID, {
-        "$where": f"bbl IN ({quoted})",
-        "$select": "document_id,bbl",
-        "$limit": len(bbls) * 50,  # each BBL may have many historical deeds
+        "$where": " OR ".join(parts),
+        "$select": "document_id,borough,block,lot",
+        "$limit": len(bbls) * 50,  # each parcel may have many historical deeds
     })
 
 
 def fetch_deed_masters(document_ids: list[str]) -> list[dict]:
-    """Step 2: get arms-length deed records from ACRIS Master for a list of document_ids."""
+    """Step 2: get arms-length deed records from ACRIS Master for a list of document_ids.
+
+    Uses OR conditions for doc_type instead of IN() to avoid Socrata parser
+    issues with values that contain commas (e.g. 'DEED, RC').
+    """
     if not document_ids:
         return []
-    doc_type_list = ", ".join(f"'{t}'" for t in sorted(ARMS_LENGTH_DOC_TYPES))
+    # Build OR filter for doc_type — avoids Socrata IN() issues with comma-containing values
+    doc_type_filter = " OR ".join(f"doc_type='{t}'" for t in sorted(ARMS_LENGTH_DOC_TYPES))
     results: list[dict] = []
     for start in range(0, len(document_ids), DOC_BATCH_SIZE):
         batch = document_ids[start : start + DOC_BATCH_SIZE]
@@ -122,10 +154,10 @@ def fetch_deed_masters(document_ids: list[str]) -> list[dict]:
         rows = _soda_get(ACRIS_MASTER_ID, {
             "$where": (
                 f"document_id IN ({quoted})"
-                f" AND doc_type IN ({doc_type_list})"
-                f" AND docamount > {MIN_SALE_PRICE}"
+                f" AND ({doc_type_filter})"
+                f" AND document_amt > {MIN_SALE_PRICE}"
             ),
-            "$select": "document_id,doc_type,docamount,document_date,recorded_datetime,percent_trans",
+            "$select": "document_id,doc_type,document_amt,document_date,recorded_datetime,percent_trans",
             "$limit": len(batch) + 50,
         })
         results.extend(rows)
@@ -238,7 +270,14 @@ def ingest(limit: Optional[int] = None, dry_run: bool = False, force: bool = Fal
         doc_to_bbl: dict[str, str] = {}
         for rec in legals:
             doc_id = (rec.get("document_id") or "").strip()
-            bbl = (rec.get("bbl") or "").strip()
+            # Reconstruct BBL from borough/block/lot returned by ACRIS Legals
+            try:
+                b = rec.get("borough", "").strip()
+                bl = rec.get("block", "").strip()
+                lt = rec.get("lot", "").strip()
+                bbl = f"{b}{int(bl):05d}{int(lt):04d}" if b and bl and lt else ""
+            except (ValueError, TypeError):
+                bbl = ""
             if doc_id and bbl:
                 doc_to_bbl[doc_id] = bbl
 
@@ -265,7 +304,7 @@ def ingest(limit: Optional[int] = None, dry_run: bool = False, force: bool = Fal
             if not bbl:
                 continue
 
-            sale_price = _safe_numeric(rec.get("docamount"))
+            sale_price = _safe_numeric(rec.get("document_amt"))
             sale_date = _parse_date(rec.get("document_date"))
             party = parties.get(doc_id, {})
 
