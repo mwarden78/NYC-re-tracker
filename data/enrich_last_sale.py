@@ -55,7 +55,7 @@ ACRIS_PARTIES_ID = "636b-3b5g"   # Real Property Parties (seller/buyer names)
 
 REQUEST_TIMEOUT = 30
 BATCH_SIZE = 100        # BBLs per Legals batch
-DOC_BATCH_SIZE = 500    # document_ids per Master / Parties batch
+DOC_BATCH_SIZE = 75     # document_ids per Master / Parties batch (keeps URL under Socrata limit)
 
 # Arms-length deed types to ingest (nominal/non-market transfers are excluded)
 ARMS_LENGTH_DOC_TYPES = frozenset({

@@ -22,17 +22,30 @@ _TTL = 300  # seconds — refresh data every 5 minutes
 def load_properties(
     borough: str | None = None,
     deal_type: str | None = None,
-    limit: int = 500,
 ) -> list[dict]:
-    """Return properties from Supabase, optionally filtered."""
+    """Return all properties from Supabase, paginating past the 1k-row API limit."""
     client = get_client()
-    query = client.table("properties").select("*").order("created_at", desc=True).limit(limit)
-    if borough:
-        query = query.eq("borough", borough)
-    if deal_type:
-        query = query.eq("deal_type", deal_type)
-    result = query.execute()
-    return result.data or []
+    PAGE = 1000
+    all_rows: list[dict] = []
+    offset = 0
+    while True:
+        query = (
+            client.table("properties")
+            .select("*")
+            .order("created_at", desc=True)
+            .range(offset, offset + PAGE - 1)
+        )
+        if borough:
+            query = query.eq("borough", borough)
+        if deal_type:
+            query = query.eq("deal_type", deal_type)
+        result = query.execute()
+        batch = result.data or []
+        all_rows.extend(batch)
+        if len(batch) < PAGE:
+            break
+        offset += PAGE
+    return all_rows
 
 
 @st.cache_data(ttl=_TTL)
