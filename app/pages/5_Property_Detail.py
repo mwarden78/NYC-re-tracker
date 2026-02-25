@@ -11,6 +11,7 @@ import streamlit as st
 from db import (
     add_to_pipeline,
     load_deal_by_property,
+    load_lien_history_by_property,
     load_property_by_id,
     load_violations_by_property,
     update_deal_notes,
@@ -239,6 +240,53 @@ with st.expander("🏛 Parcel & Market Data", expanded=_has_pluto or _has_sale):
         d3.markdown(f"**Land Use**  \n{land_use}" if land_use else "**Land Use**  \n—")
         d4.markdown(f"**Units (Res)**  \n{num_units:,}" if num_units is not None else "**Units (Res)**  \n—")
         d5.markdown(f"**Floors**  \n{num_floors}" if num_floors is not None else "**Floors**  \n—")
+
+st.divider()
+
+# ---------------------------------------------------------------------------
+# Lien History (TES-40)
+# ---------------------------------------------------------------------------
+try:
+    lien_records = load_lien_history_by_property(property_id)
+except Exception as e:
+    lien_records = []
+    st.warning(f"Could not load lien history: {e}")
+
+lien_count = len(lien_records)
+repeat_offender = lien_count >= 3
+
+lien_label = f"📋 Lien History ({lien_count})" if lien_count else "📋 Lien History"
+with st.expander(lien_label, expanded=lien_count > 0):
+    if not lien_records:
+        st.info(
+            "No prior lien history found. "
+            "Run `python data/ingest_lien_history.py` to populate lien history for tax lien properties."
+        )
+    else:
+        # Summary row
+        lh1, lh2 = st.columns([1, 3])
+        lh1.metric("Total Lien Notices", lien_count)
+        if repeat_offender:
+            lh2.error("⚠️ Repeat offender — 3 or more prior lien notices on this parcel")
+        else:
+            lh2.success("✅ No repeat-offender flag (fewer than 3 prior notices)")
+
+        st.divider()
+
+        # Timeline table
+        rows_display = []
+        for r in lien_records:
+            rows_display.append({
+                "Notice Month": r.get("notice_month") or "—",
+                "Lien Cycle": r.get("lien_cycle") or "—",
+                "Tax Class": r.get("tax_class") or "—",
+                "Bldg Class": r.get("building_class") or "—",
+                "Water Only": "Yes" if r.get("water_debt_only") else "No",
+                "Amount": f"${r['lien_amount']:,.0f}" if r.get("lien_amount") else "—",
+            })
+
+        df_liens = pd.DataFrame(rows_display)
+        st.dataframe(df_liens, use_container_width=True, hide_index=True)
 
 st.divider()
 
