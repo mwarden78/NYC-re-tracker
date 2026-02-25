@@ -401,7 +401,7 @@ if saved_searches:
             f"for your saved searches: {_names}"
         )
         with _col_link:
-            st.page_link("pages/4_Alerts.py", label="View Alerts →")
+            st.page_link("pages/5_Alerts.py", label="View Alerts →")
 
 # ---------------------------------------------------------------------------
 # Property grid
