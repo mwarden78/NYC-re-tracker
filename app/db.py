@@ -97,6 +97,20 @@ def update_deal_notes(deal_id: str, notes: str) -> None:
 
 
 @st.cache_data(ttl=_TTL)
+def load_sale_history(property_id: str) -> list[dict]:
+    """Return sale_history rows for a property, ordered by sale_date DESC."""
+    client = get_client()
+    result = (
+        client.table("sale_history")
+        .select("*")
+        .eq("property_id", property_id)
+        .order("sale_date", desc=True)
+        .execute()
+    )
+    return result.data or []
+
+
+@st.cache_data(ttl=_TTL)
 def load_violations_by_property(property_id: str) -> list[dict]:
     """Return all violations for a single property, ordered by issued_date desc."""
     client = get_client()
