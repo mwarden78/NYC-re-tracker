@@ -108,6 +108,8 @@ CREATE TRIGGER deals_updated_at
 --   ALTER TABLE properties ADD COLUMN IF NOT EXISTS tax_arrears NUMERIC;
 --   ALTER TABLE properties ADD COLUMN IF NOT EXISTS annual_tax NUMERIC;
 --   ALTER TABLE properties ADD COLUMN IF NOT EXISTS tax_bill_date DATE;
+--   (api_quota table — run the full CREATE TABLE block above, or:)
+--   CREATE TABLE IF NOT EXISTS api_quota (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), api_name TEXT NOT NULL, year_month TEXT NOT NULL, call_count INTEGER NOT NULL DEFAULT 0, monthly_limit INTEGER NOT NULL DEFAULT 50, updated_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE (api_name, year_month));
 
 -- Indexes for common filters
 CREATE INDEX IF NOT EXISTS idx_properties_borough ON properties(borough);
@@ -172,6 +174,17 @@ CREATE TABLE IF NOT EXISTS lien_history (
 CREATE INDEX IF NOT EXISTS idx_lien_history_property_id  ON lien_history(property_id);
 CREATE INDEX IF NOT EXISTS idx_lien_history_bbl          ON lien_history(bbl);
 CREATE INDEX IF NOT EXISTS idx_lien_history_notice_month ON lien_history(notice_month DESC);
+
+-- API quota table: tracks monthly call counts per external API to enforce limits
+CREATE TABLE IF NOT EXISTS api_quota (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    api_name      TEXT NOT NULL,              -- e.g. 'rentcast', 'walkscore'
+    year_month    TEXT NOT NULL,              -- e.g. '2026-02'
+    call_count    INTEGER NOT NULL DEFAULT 0, -- calls made this month
+    monthly_limit INTEGER NOT NULL DEFAULT 50,-- hard cap (raises error if exceeded)
+    updated_at    TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (api_name, year_month)
+);
 
 -- Saved searches table: user-saved filter configurations for deal alerts
 CREATE TABLE IF NOT EXISTS saved_searches (
