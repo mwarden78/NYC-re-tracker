@@ -29,8 +29,8 @@ from datetime import date
 from typing import Optional
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from data.ingest_nyc_open_data import soda_get_all  # noqa: E402
-from utils.supabase_client import get_client         # noqa: E402
+from data.ingest_nyc_open_data import soda_get_all      # noqa: E402
+from utils.supabase_client import get_client, fetch_all_rows  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -252,8 +252,8 @@ def load_properties(property_id: Optional[str] = None, limit: Optional[int] = No
     if property_id:
         query = query.eq("id", property_id)
     if limit:
-        query = query.limit(limit)
-    return query.execute().data or []
+        return query.limit(limit).execute().data or []
+    return fetch_all_rows(query)
 
 
 def run(property_id: Optional[str], limit: Optional[int], dry_run: bool) -> None:

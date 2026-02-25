@@ -27,7 +27,7 @@ from urllib.parse import quote
 import requests
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from utils.supabase_client import get_client  # noqa: E402
+from utils.supabase_client import get_client, fetch_all_rows  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -126,10 +126,7 @@ def enrich(
     if not force:
         # Skip rows that already have all three scores
         query = query.is_("walk_score", "null")
-    if limit:
-        query = query.limit(limit)
-
-    rows = query.execute().data
+    rows = query.limit(limit).execute().data if limit else fetch_all_rows(query)
     log.info("Found %d properties to enrich with Walk Score data", len(rows))
 
     if not rows:
