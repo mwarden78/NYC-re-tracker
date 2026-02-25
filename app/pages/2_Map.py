@@ -10,8 +10,10 @@ import pydeck as pdk
 import requests
 import streamlit as st
 from db import add_to_pipeline, load_deals, load_last_sales, load_properties, load_violation_counts
+from sidebar import render_more_section
 
 st.set_page_config(page_title="Map | NYC RE Tracker", page_icon="🗺", layout="wide")
+render_more_section()
 
 st.title("Map")
 st.caption("Geographic view of all tracked properties")

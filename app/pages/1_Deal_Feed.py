@@ -20,8 +20,10 @@ from db import (
     mark_search_checked,
     save_search,
 )
+from sidebar import render_more_section
 
 st.set_page_config(page_title="Deal Feed | NYC RE Tracker", page_icon="🏠", layout="wide")
+render_more_section()
 
 st.title("Deal Feed")
 st.caption("Browse foreclosure and tax lien properties")

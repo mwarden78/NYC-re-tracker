@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import streamlit as st
 from db import load_deals, load_violation_counts, update_deal_status
+from sidebar import render_more_section
 
 st.set_page_config(page_title="Pipeline | NYC RE Tracker", page_icon="📋", layout="wide")
+render_more_section()
 
 st.title("Pipeline")
 st.caption("Track deals: Watching → Analyzing → Offer Made → Dead")

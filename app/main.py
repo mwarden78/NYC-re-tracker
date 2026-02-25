@@ -6,12 +6,14 @@ Run with:
 
 import streamlit as st
 from db import load_summary
+from sidebar import render_more_section
 
 st.set_page_config(
     page_title="NYC RE Tracker",
     page_icon="🏙",
     layout="wide",
 )
+render_more_section()
 
 st.title("NYC RE Tracker")
 st.caption("NYC residential real estate deal tracker — value-add & distressed properties")
