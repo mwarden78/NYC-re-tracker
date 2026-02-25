@@ -73,7 +73,7 @@ def _render_deal_card(deal: dict) -> None:
     prop_id = prop.get("id")
     if prop_id and st.button("View Details →", key=f"detail_{deal['id']}", use_container_width=True):
         st.query_params["property_id"] = prop_id
-        st.switch_page("pages/5_Property_Detail.py")
+        st.switch_page("pages/_Property_Detail.py")
 
 
 try:

@@ -638,7 +638,7 @@ if selected_prop:
 
         with col_actions:
             st.page_link(
-                "pages/5_Property_Detail.py",
+                "pages/_Property_Detail.py",
                 label="View Full Details →",
             )
             if pipeline_status:
@@ -677,7 +677,7 @@ if filter_by_bounds and rows:
                     st.caption(PIPELINE_LABELS.get(pipeline_status, pipeline_status))
                 if st.button("View Details →", key=f"bounds_detail_{pid}", use_container_width=True):
                     st.query_params["property_id"] = pid
-                    st.switch_page("pages/5_Property_Detail.py")
+                    st.switch_page("pages/_Property_Detail.py")
 
 # ---------------------------------------------------------------------------
 # Legend + summary
