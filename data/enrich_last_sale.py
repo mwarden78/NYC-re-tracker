@@ -35,7 +35,7 @@ from typing import Optional
 import requests
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from utils.supabase_client import get_client  # noqa: E402
+from utils.supabase_client import get_client, fetch_all_rows  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -217,19 +217,15 @@ def _parse_date(val: Optional[str]) -> Optional[str]:
 def ingest(limit: Optional[int] = None, dry_run: bool = False, force: bool = False) -> None:
     client = get_client()
 
-    # Load all properties that have a BBL
-    rows = (
-        client.table("properties")
-        .select("id,address,borough,bbl")
-        .not_.is_("bbl", "null")
-        .execute()
-        .data
+    # Load all properties that have a BBL (paginate past Supabase's 1000-row limit)
+    rows = fetch_all_rows(
+        client.table("properties").select("id,address,borough,bbl").not_.is_("bbl", "null")
     )
     log.info("Total properties with BBL: %d", len(rows))
 
     # Unless --force, skip those that already have sale_history records
     if not force:
-        existing_resp = client.table("sale_history").select("property_id").execute().data
+        existing_resp = fetch_all_rows(client.table("sale_history").select("property_id"))
         existing_ids = {r["property_id"] for r in existing_resp}
         rows = [r for r in rows if r["id"] not in existing_ids]
         log.info("Properties without sale history (to process): %d", len(rows))
