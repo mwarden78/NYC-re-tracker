@@ -351,7 +351,7 @@ def _render_card(prop: dict, viol_count: int = 0, last_sale: dict | None = None)
 
         if st.button("View Details →", key=f"detail_{prop_id}", use_container_width=True):
             st.query_params["property_id"] = prop_id
-            st.switch_page("pages/5_Property_Detail.py")
+            st.switch_page("pages/_Property_Detail.py")
 
 
 # ---------------------------------------------------------------------------
@@ -399,7 +399,7 @@ if saved_searches:
             f"for your saved searches: {_names}"
         )
         with _col_link:
-            st.page_link("pages/6_Alerts.py", label="View Alerts →")
+            st.page_link("pages/4_Alerts.py", label="View Alerts →")
 
 # ---------------------------------------------------------------------------
 # Property grid
