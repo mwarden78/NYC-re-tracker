@@ -259,6 +259,54 @@ CREATE INDEX IF NOT EXISTS idx_complaints_311_property_id    ON complaints_311(p
 CREATE INDEX IF NOT EXISTS idx_complaints_311_created_date   ON complaints_311(created_date DESC);
 CREATE INDEX IF NOT EXISTS idx_complaints_311_complaint_type ON complaints_311(complaint_type);
 
+-- Listings table: active for-sale listings from RentCast (TES-73)
+-- Separate from properties table (which tracks distressed/manually-added deals).
+-- Refreshed periodically; AVM scores populated by TES-75 scoring pipeline.
+CREATE TABLE IF NOT EXISTS listings (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    rentcast_id      TEXT UNIQUE NOT NULL,
+    address          TEXT NOT NULL,
+    borough          TEXT,
+    zip_code         TEXT,
+    latitude         NUMERIC(9, 6),
+    longitude        NUMERIC(9, 6),
+    bbl              TEXT,               -- populated after geocoding
+    price            INTEGER,
+    price_per_sqft   NUMERIC(10, 2),
+    sqft             INTEGER,
+    lot_sqft         INTEGER,
+    beds             NUMERIC(4, 1),
+    baths            NUMERIC(4, 1),
+    property_type    TEXT,
+    year_built       INTEGER,
+    status           TEXT,               -- active / pending / inactive
+    days_on_market   INTEGER,
+    listing_date     DATE,
+
+    -- AVM fields (populated by scoring pipeline, TES-75)
+    predicted_value  INTEGER,
+    value_ratio      NUMERIC(6, 3),      -- predicted_value / price
+    avm_model_ver    TEXT,               -- e.g. 'v1' — for tracking model version
+
+    -- PLUTO enrichment fields (populated during ingest)
+    bldgclass        TEXT,
+    zonedist1        TEXT,
+    residfar         NUMERIC(6, 3),
+    builtfar         NUMERIC(6, 3),
+    far_remaining    NUMERIC(6, 3),
+    num_floors       NUMERIC(5, 1),
+    units_res        INTEGER,
+    units_total      INTEGER,
+
+    last_seen_at     TIMESTAMPTZ DEFAULT NOW(),
+    created_at       TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_listings_borough     ON listings(borough);
+CREATE INDEX IF NOT EXISTS idx_listings_zip         ON listings(zip_code);
+CREATE INDEX IF NOT EXISTS idx_listings_status      ON listings(status);
+CREATE INDEX IF NOT EXISTS idx_listings_value_ratio ON listings(value_ratio DESC);
+CREATE INDEX IF NOT EXISTS idx_listings_bbl         ON listings(bbl);
+
 -- Saved searches table: user-saved filter configurations for deal alerts
 CREATE TABLE IF NOT EXISTS saved_searches (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
