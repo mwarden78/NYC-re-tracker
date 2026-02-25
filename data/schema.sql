@@ -110,6 +110,8 @@ CREATE TRIGGER deals_updated_at
 --   ALTER TABLE properties ADD COLUMN IF NOT EXISTS tax_bill_date DATE;
 --   (api_quota table — run the full CREATE TABLE block above, or:)
 --   CREATE TABLE IF NOT EXISTS api_quota (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), api_name TEXT NOT NULL, year_month TEXT NOT NULL, call_count INTEGER NOT NULL DEFAULT 0, monthly_limit INTEGER NOT NULL DEFAULT 50, updated_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE (api_name, year_month));
+--   ALTER TABLE properties ADD COLUMN IF NOT EXISTS active_mortgage_amount NUMERIC;
+--   ALTER TABLE properties ADD COLUMN IF NOT EXISTS active_mortgage_lender TEXT;
 
 -- Indexes for common filters
 CREATE INDEX IF NOT EXISTS idx_properties_borough ON properties(borough);
@@ -219,6 +221,43 @@ CREATE TABLE IF NOT EXISTS hpd_registrations (
     UNIQUE (property_id, registration_id)         -- idempotent upserts
 );
 CREATE INDEX IF NOT EXISTS idx_hpd_registrations_property_id ON hpd_registrations(property_id);
+
+-- Mortgages table: ACRIS mortgage records linked to properties (TES-54)
+CREATE TABLE IF NOT EXISTS mortgages (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    property_id      UUID NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+    document_id      TEXT NOT NULL,      -- ACRIS 16-char document ID
+    doc_type         TEXT,               -- e.g. 'MTGE', 'AGMT', 'ASST'
+    lender_name      TEXT,               -- ACRIS Parties party_type='2'
+    mortgage_amount  NUMERIC,            -- document_amt from ACRIS Master
+    mortgage_date    DATE,               -- document_date
+    maturity_date    DATE,               -- good_thru_date from ACRIS Master
+    recorded_at      TIMESTAMPTZ,
+    bbl              TEXT,
+    created_at       TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (property_id, document_id)
+);
+CREATE INDEX IF NOT EXISTS idx_mortgages_property_id   ON mortgages(property_id);
+CREATE INDEX IF NOT EXISTS idx_mortgages_mortgage_date ON mortgages(mortgage_date DESC);
+CREATE INDEX IF NOT EXISTS idx_mortgages_bbl           ON mortgages(bbl);
+
+-- 311 complaints table: service requests linked to properties (TES-55)
+CREATE TABLE IF NOT EXISTS complaints_311 (
+    id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    property_id    UUID NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+    external_id    TEXT NOT NULL,    -- 311 unique_key field
+    complaint_type TEXT,             -- e.g. 'HEAT/HOT WATER', 'NOISE - RESIDENTIAL'
+    descriptor     TEXT,
+    status         TEXT,             -- e.g. 'Open', 'Closed', 'In Progress'
+    agency         TEXT,             -- HPD, NYPD, DOB, etc.
+    created_date   DATE,
+    closed_date    DATE,
+    created_at     TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (property_id, external_id)
+);
+CREATE INDEX IF NOT EXISTS idx_complaints_311_property_id    ON complaints_311(property_id);
+CREATE INDEX IF NOT EXISTS idx_complaints_311_created_date   ON complaints_311(created_date DESC);
+CREATE INDEX IF NOT EXISTS idx_complaints_311_complaint_type ON complaints_311(complaint_type);
 
 -- Saved searches table: user-saved filter configurations for deal alerts
 CREATE TABLE IF NOT EXISTS saved_searches (
