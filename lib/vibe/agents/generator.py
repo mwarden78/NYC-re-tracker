@@ -7,12 +7,15 @@ from pathlib import Path
 
 from lib.vibe.agents.spec import AssistantFormat, InstructionSpec
 
-# Placeholder patterns that indicate a generated/template file
+# Placeholder patterns that indicate an uncustomized template file.
+# These should ONLY be patterns that disappear once a user fills in real
+# project details.  Header lines like "# Generated:" or "# DO NOT EDIT
+# DIRECTLY" persist in every generated file (even customised ones) and
+# must NOT be listed here – otherwise _is_generated_file() always
+# returns True and customised files get overwritten.
 _PLACEHOLDER_PATTERNS = [
     "(your project name)",
-    "# DO NOT EDIT DIRECTLY - regenerate with:",
-    "# Generated:",
-    "# Source: agent_instructions/",
+    "(what this project does)",
 ]
 
 
@@ -32,8 +35,102 @@ def _has_project_content(file_path: Path) -> bool:
         if not content.strip():
             return False
         return not _is_generated_file(content)
-    except Exception:
+    except OSError:
         return False
+
+
+def _render_labels_section(labels: dict[str, list[str]]) -> list[str]:
+    """Render the Available Labels section from config labels.
+
+    Returns a list of lines (without trailing newline) for embedding into
+    the generated output.
+    """
+    lines: list[str] = []
+    lines.append("## Available Labels")
+    lines.append("")
+    lines.append(
+        "These labels are configured in `.vibe/config.json`. Apply them when creating tickets."
+    )
+    lines.append("")
+
+    category_titles = {
+        "type": "Type (exactly one required)",
+        "risk": "Risk (exactly one required)",
+        "area": "Area (at least one required)",
+        "special": "Special (as needed)",
+    }
+
+    for category in ("type", "risk", "area", "special"):
+        values = labels.get(category, [])
+        if values:
+            title = category_titles.get(category, category.title())
+            lines.append(f"**{title}:** {', '.join(values)}")
+            lines.append("")
+
+    return lines
+
+
+def _render_ticket_discipline_section() -> list[str]:
+    """Render the Ticket Discipline section with enforcement rules.
+
+    Returns a list of lines for embedding into generated output.
+    """
+    lines: list[str] = []
+    lines.append("## Ticket Discipline")
+    lines.append("")
+    lines.append("Follow these rules for every ticket and PR:")
+    lines.append("")
+    lines.append("### Labels Are Required")
+    lines.append("")
+    lines.append("Every ticket **must** have labels when created:")
+    lines.append("")
+    lines.append("- **Type** (exactly one): Bug, Feature, Chore, or Refactor")
+    lines.append("- **Area** (at least one): Frontend, Backend, Infra, or Docs")
+    lines.append("- **Risk** (exactly one): Low Risk, Medium Risk, or High Risk")
+    lines.append("")
+    lines.append("```bash")
+    lines.append(
+        'bin/ticket create "Fix login bug" '
+        '--description "Login returns 500 on special chars." '
+        '--label Bug --label Frontend --label "Low Risk"'
+    )
+    lines.append("```")
+    lines.append("")
+    lines.append("### Parent/Child Relationships")
+    lines.append("")
+    lines.append("When creating sub-tasks, set the parent ticket:")
+    lines.append("")
+    lines.append("```bash")
+    lines.append(
+        'bin/ticket create "Add signup form" '
+        '--description "React signup component." '
+        "--label Feature --label Frontend --parent PROJ-100"
+    )
+    lines.append("```")
+    lines.append("")
+    lines.append("### Blocking Relationships")
+    lines.append("")
+    lines.append(
+        "When one ticket must be completed before another can start, "
+        "link them with a blocking relationship. "
+        "The prerequisite ticket blocks the dependent ticket:"
+    )
+    lines.append("")
+    lines.append("```bash")
+    lines.append("bin/ticket link PROJ-101 --blocks PROJ-102")
+    lines.append("```")
+    lines.append("")
+    lines.append("### Every PR Needs a Ticket")
+    lines.append("")
+    lines.append(
+        "Every pull request **must** reference a ticket. Include the ticket ID in the PR title:"
+    )
+    lines.append("")
+    lines.append("```bash")
+    lines.append('bin/vibe pr --title "PROJ-123: Add user authentication"')
+    lines.append("```")
+    lines.append("")
+    return lines
 
 
 class InstructionGenerator:
@@ -77,8 +174,8 @@ class InstructionGenerator:
                 AssistantFormat.COPILOT,
             ]
 
-        results = {}
-        skipped = {}
+        results: dict[str, Path] = {}
+        skipped: dict[str, Path | str] = {}
 
         for format in formats:
             output_path = output_dir / format.output_path
@@ -160,30 +257,42 @@ class InstructionGenerator:
             lines.append("---")
             lines.append("")
 
+        # Available Labels (from config)
+        if self.spec.labels:
+            lines.extend(_render_labels_section(self.spec.labels))
+            lines.append("---")
+            lines.append("")
+
+        # Ticket Discipline
+        if self.spec.labels or self.spec.core_rules:
+            lines.extend(_render_ticket_discipline_section())
+            lines.append("---")
+            lines.append("")
+
         # Commands
         if self.spec.commands:
             lines.append("## Available Commands")
             lines.append("")
             lines.append("| Command | Description |")
             lines.append("|---------|-------------|")
-            for cmd in self.spec.commands:
-                lines.append(f"| `{cmd.usage or cmd.name}` | {cmd.description} |")
+            for cmd_spec in self.spec.commands:
+                lines.append(f"| `{cmd_spec.usage or cmd_spec.name}` | {cmd_spec.description} |")
             lines.append("")
 
             # Detailed command reference
             lines.append("### Command Details")
             lines.append("")
-            for cmd in self.spec.commands:
-                lines.append(f"#### {cmd.name}")
+            for cmd_spec in self.spec.commands:
+                lines.append(f"#### {cmd_spec.name}")
                 lines.append("")
-                lines.append(cmd.description)
-                if cmd.usage:
+                lines.append(cmd_spec.description)
+                if cmd_spec.usage:
                     lines.append("")
-                    lines.append(f"**Usage:** `{cmd.usage}`")
-                if cmd.examples:
+                    lines.append(f"**Usage:** `{cmd_spec.usage}`")
+                if cmd_spec.examples:
                     lines.append("")
                     lines.append("**Examples:**")
-                    for ex in cmd.examples:
+                    for ex in cmd_spec.examples:
                         lines.append("```bash")
                         lines.append(ex)
                         lines.append("```")
@@ -205,8 +314,8 @@ class InstructionGenerator:
                     if step.commands:
                         lines.append("")
                         lines.append("```bash")
-                        for cmd in step.commands:
-                            lines.append(cmd)
+                        for step_cmd in step.commands:
+                            lines.append(step_cmd)
                         lines.append("```")
                     lines.append("")
             lines.append("---")
@@ -269,6 +378,25 @@ class InstructionGenerator:
                 lines.append(f"{rule}")
             lines.append("")
 
+        # Available Labels (from config)
+        if self.spec.labels:
+            lines.append("# Available Labels")
+            for category in ("type", "risk", "area", "special"):
+                values = self.spec.labels.get(category, [])
+                if values:
+                    lines.append(f"# {category.title()}: {', '.join(values)}")
+            lines.append("")
+
+        # Ticket Discipline (concise for Cursor)
+        if self.spec.labels or self.spec.core_rules:
+            lines.append("# Ticket Discipline")
+            lines.append(
+                "Every ticket must have type and area labels. "
+                "Every PR title must include the ticket ID. "
+                "Use --parent for sub-tasks and bin/ticket link for blocking."
+            )
+            lines.append("")
+
         # Anti-patterns
         if self.spec.anti_patterns:
             lines.append("# Avoid")
@@ -281,8 +409,8 @@ class InstructionGenerator:
         if self.spec.commands:
             lines.append("# Available Commands")
             lines.append("")
-            for cmd in self.spec.commands:
-                lines.append(f"# {cmd.name}: {cmd.usage or cmd.description}")
+            for cmd_spec in self.spec.commands:
+                lines.append(f"# {cmd_spec.name}: {cmd_spec.usage or cmd_spec.description}")
             lines.append("")
 
         # Workflows - condensed
@@ -292,8 +420,8 @@ class InstructionGenerator:
                 lines.append(f"# {workflow_name}:")
                 for step in steps:
                     if step.commands:
-                        for cmd in step.commands:
-                            lines.append(f"#   {cmd}")
+                        for step_cmd in step.commands:
+                            lines.append(f"#   {step_cmd}")
             lines.append("")
 
         return "\n".join(lines)
@@ -336,6 +464,14 @@ class InstructionGenerator:
                 lines.append(f"- {rule}")
             lines.append("")
 
+        # Available Labels (from config)
+        if self.spec.labels:
+            lines.extend(_render_labels_section(self.spec.labels))
+
+        # Ticket Discipline
+        if self.spec.labels or self.spec.core_rules:
+            lines.extend(_render_ticket_discipline_section())
+
         # What to avoid
         if self.spec.anti_patterns:
             lines.append("## Patterns to Avoid")
@@ -358,11 +494,11 @@ class InstructionGenerator:
             lines.append("")
             lines.append("Use these commands for common operations:")
             lines.append("")
-            for cmd in self.spec.commands:
-                if cmd.usage:
-                    lines.append(f"- `{cmd.usage}` - {cmd.description}")
+            for cmd_spec in self.spec.commands:
+                if cmd_spec.usage:
+                    lines.append(f"- `{cmd_spec.usage}` - {cmd_spec.description}")
                 else:
-                    lines.append(f"- **{cmd.name}**: {cmd.description}")
+                    lines.append(f"- **{cmd_spec.name}**: {cmd_spec.description}")
             lines.append("")
 
         return "\n".join(lines)
@@ -411,6 +547,14 @@ class InstructionGenerator:
                 lines.append(f"{i}. {rule}")
             lines.append("")
 
+        # Available Labels (from config)
+        if self.spec.labels:
+            lines.extend(_render_labels_section(self.spec.labels))
+
+        # Ticket Discipline
+        if self.spec.labels or self.spec.core_rules:
+            lines.extend(_render_ticket_discipline_section())
+
         # Commands
         if self.spec.commands:
             lines.append("## Commands")
@@ -418,11 +562,11 @@ class InstructionGenerator:
             lines.append("Use these commands:")
             lines.append("")
             lines.append("```")
-            for cmd in self.spec.commands:
-                if cmd.usage:
-                    lines.append(f"{cmd.usage}  # {cmd.description}")
+            for cmd_spec in self.spec.commands:
+                if cmd_spec.usage:
+                    lines.append(f"{cmd_spec.usage}  # {cmd_spec.description}")
                 else:
-                    lines.append(f"{cmd.name}: {cmd.description}")
+                    lines.append(f"{cmd_spec.name}: {cmd_spec.description}")
             lines.append("```")
             lines.append("")
 
@@ -439,8 +583,8 @@ class InstructionGenerator:
                         lines.append(f"   {step.description}")
                     if step.commands:
                         lines.append("   ```")
-                        for cmd in step.commands:
-                            lines.append(f"   {cmd}")
+                        for step_cmd in step.commands:
+                            lines.append(f"   {step_cmd}")
                         lines.append("   ```")
                 lines.append("")
 

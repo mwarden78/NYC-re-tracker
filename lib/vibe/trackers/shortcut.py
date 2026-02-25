@@ -6,6 +6,7 @@ from typing import Any
 import requests
 
 from lib.vibe.trackers.base import Ticket, TrackerBase
+from lib.vibe.utils.retry import with_retry
 
 SHORTCUT_API_URL = "https://api.app.shortcut.com/api/v3"
 
@@ -32,6 +33,14 @@ class ShortcutTracker(TrackerBase):
     def name(self) -> str:
         return "shortcut"
 
+    @with_retry()
+    def _request(self, method: str, path: str, **kwargs: Any) -> requests.Response:
+        """Make an API request with retry logic."""
+        url = f"{SHORTCUT_API_URL}{path}"
+        response = requests.request(method, url, headers=self._headers, timeout=30, **kwargs)
+        response.raise_for_status()
+        return response
+
     def authenticate(self, **kwargs: Any) -> bool:
         """Authenticate with Shortcut API."""
         api_token = kwargs.get("api_token") or self._api_token
@@ -46,13 +55,9 @@ class ShortcutTracker(TrackerBase):
 
         # Test authentication by fetching current member
         try:
-            response = requests.get(
-                f"{SHORTCUT_API_URL}/member",
-                headers=self._headers,
-                timeout=30,
-            )
-            return response.status_code == 200
-        except Exception:
+            response = self._request("GET", "/member")
+            return bool(response.status_code == 200)
+        except requests.RequestException:
             return False
 
     def get_ticket(self, ticket_id: str) -> Ticket | None:
@@ -60,17 +65,14 @@ class ShortcutTracker(TrackerBase):
         # Shortcut story IDs are numeric
         story_id = ticket_id.lstrip("SC-").lstrip("#")
         try:
-            response = requests.get(
-                f"{SHORTCUT_API_URL}/stories/{story_id}",
-                headers=self._headers,
-                timeout=30,
-            )
-            if response.status_code == 404:
-                return None
-            response.raise_for_status()
+            response = self._request("GET", f"/stories/{story_id}")
             story = response.json()
             return self._parse_story(story)
-        except Exception:
+        except requests.HTTPError as e:
+            if e.response is not None and e.response.status_code == 404:
+                return None
+            return None
+        except requests.RequestException:
             return None
 
     def list_tickets(
@@ -79,7 +81,7 @@ class ShortcutTracker(TrackerBase):
         labels: list[str] | None = None,
         limit: int = 50,
     ) -> list[Ticket]:
-        """List stories with optional filters using search."""
+        """List stories with optional filters using search, with pagination."""
         # Build search query
         query_parts = []
 
@@ -97,19 +99,36 @@ class ShortcutTracker(TrackerBase):
 
         search_query = " ".join(query_parts)
 
+        all_tickets: list[Ticket] = []
+        page_size = min(limit, 25)  # Shortcut default page size
+        next_token: str | None = None
+
         try:
-            response = requests.get(
-                f"{SHORTCUT_API_URL}/search/stories",
-                headers=self._headers,
-                params={"query": search_query, "page_size": limit},
-                timeout=30,
-            )
-            response.raise_for_status()
-            data = response.json()
-            stories = data.get("data", [])
-            return [self._parse_story(story) for story in stories[:limit]]
-        except Exception:
-            return []
+            while True:
+                params: dict[str, Any] = {"query": search_query, "page_size": page_size}
+                if next_token:
+                    params["next"] = next_token
+
+                response = self._request(
+                    "GET",
+                    "/search/stories",
+                    params=params,
+                )
+                data = response.json()
+                stories = data.get("data", [])
+
+                all_tickets.extend(self._parse_story(story) for story in stories)
+
+                if len(all_tickets) >= limit:
+                    return all_tickets[:limit]
+
+                next_token = data.get("next")
+                if not next_token:
+                    break
+
+            return all_tickets
+        except requests.RequestException:
+            return all_tickets  # Return what we have so far
 
     def create_ticket(
         self,
@@ -124,20 +143,14 @@ class ShortcutTracker(TrackerBase):
             "story_type": "feature",
         }
 
-        # If labels provided, try to find matching label IDs
+        # If labels provided, resolve or create matching label IDs
         if labels:
-            label_ids = self._get_label_ids(labels)
+            label_ids = self._get_or_create_label_ids(labels)
             if label_ids:
                 payload["labels"] = [{"id": lid} for lid in label_ids]
 
         try:
-            response = requests.post(
-                f"{SHORTCUT_API_URL}/stories",
-                headers=self._headers,
-                json=payload,
-                timeout=30,
-            )
-            response.raise_for_status()
+            response = self._request("POST", "/stories", json=payload)
             story = response.json()
             return self._parse_story(story)
         except requests.HTTPError as e:
@@ -168,15 +181,13 @@ class ShortcutTracker(TrackerBase):
                     "Check state name in Shortcut (e.g., Done, In Progress)."
                 )
             payload["workflow_state_id"] = state_id
+        if labels:
+            label_ids = self._get_or_create_label_ids(labels)
+            if label_ids:
+                payload["labels"] = [{"id": lid} for lid in label_ids]
 
         try:
-            response = requests.put(
-                f"{SHORTCUT_API_URL}/stories/{story_id}",
-                headers=self._headers,
-                json=payload,
-                timeout=30,
-            )
-            response.raise_for_status()
+            response = self._request("PUT", f"/stories/{story_id}", json=payload)
             story = response.json()
             return self._parse_story(story)
         except requests.HTTPError as e:
@@ -186,15 +197,72 @@ class ShortcutTracker(TrackerBase):
         """Add a comment to a story."""
         story_id = ticket_id.lstrip("SC-").lstrip("#")
         try:
-            response = requests.post(
-                f"{SHORTCUT_API_URL}/stories/{story_id}/comments",
-                headers=self._headers,
-                json={"text": body},
-                timeout=30,
-            )
-            response.raise_for_status()
+            self._request("POST", f"/stories/{story_id}/comments", json={"text": body})
         except requests.HTTPError as e:
             raise RuntimeError(f"Failed to add comment: {e}") from e
+
+    def set_parent(self, ticket_id: str, parent_id: str) -> None:
+        """Set a parent (epic) relationship for a Shortcut story.
+
+        In Shortcut, the parent concept maps to epics. This method sets
+        the epic_id on the story to create a parent-child relationship.
+
+        Args:
+            ticket_id: The child story identifier (e.g. "SC-101")
+            parent_id: The parent epic/story identifier (e.g. "SC-100")
+        """
+        story_id = ticket_id.lstrip("SC-").lstrip("#")
+        parent_story_id = parent_id.lstrip("SC-").lstrip("#")
+
+        try:
+            # Try to set as epic relationship first
+            self._request(
+                "PUT",
+                f"/stories/{story_id}",
+                json={"epic_id": int(parent_story_id)},
+            )
+        except (requests.HTTPError, ValueError):
+            # If epic_id doesn't work (parent is a story, not an epic),
+            # fall back to creating a story link
+            try:
+                self._request(
+                    "POST",
+                    f"/stories/{story_id}/story-links",
+                    json={
+                        "object_id": int(parent_story_id),
+                        "verb": "blocks",
+                    },
+                )
+            except requests.HTTPError as link_err:
+                raise RuntimeError(f"Failed to set parent relationship: {link_err}") from link_err
+
+    def add_relation(self, ticket_id: str, related_id: str, relation_type: str = "related") -> None:
+        """Create a non-hierarchical relationship between two Shortcut stories.
+
+        Uses story links to create the relationship.
+
+        Args:
+            ticket_id: First story identifier
+            related_id: Second story identifier
+            relation_type: Type of relation ("related" or "blocks")
+        """
+        story_id = ticket_id.lstrip("SC-").lstrip("#")
+        related_story_id = related_id.lstrip("SC-").lstrip("#")
+
+        # Map relation types to Shortcut verbs
+        verb = "relates to" if relation_type == "related" else "blocks"
+
+        try:
+            self._request(
+                "POST",
+                f"/stories/{story_id}/story-links",
+                json={
+                    "object_id": int(related_story_id),
+                    "verb": verb,
+                },
+            )
+        except requests.HTTPError as e:
+            raise RuntimeError(f"Failed to create relation: {e}") from e
 
     def validate_config(self) -> tuple[bool, list[str]]:
         """Validate Shortcut configuration."""
@@ -212,28 +280,50 @@ class ShortcutTracker(TrackerBase):
         """Resolve label names to Shortcut label IDs."""
         if not label_names:
             return []
+        label_names = self._normalize_labels(label_names)
         try:
-            response = requests.get(
-                f"{SHORTCUT_API_URL}/labels",
-                headers=self._headers,
-                timeout=30,
-            )
-            response.raise_for_status()
+            response = self._request("GET", "/labels")
             all_labels = response.json()
             name_to_id = {label["name"].lower(): label["id"] for label in all_labels}
             return [name_to_id[name.lower()] for name in label_names if name.lower() in name_to_id]
-        except Exception:
+        except requests.RequestException:
             return []
+
+    def _get_or_create_label_ids(self, label_names: list[str]) -> list[int]:
+        """Resolve label names to IDs, creating any that don't exist."""
+        if not label_names:
+            return []
+        try:
+            response = self._request("GET", "/labels")
+            all_labels = response.json()
+            name_to_id = {label["name"].lower(): label["id"] for label in all_labels}
+
+            label_ids = []
+            for name in label_names:
+                if name.lower() in name_to_id:
+                    label_ids.append(name_to_id[name.lower()])
+                else:
+                    new_id = self._create_label(name)
+                    if new_id:
+                        label_ids.append(new_id)
+            return label_ids
+        except requests.RequestException:
+            return self._get_label_ids(label_names)
+
+    def _create_label(self, name: str) -> int | None:
+        """Create a label in Shortcut and return its ID."""
+        try:
+            response = self._request("POST", "/labels", json={"name": name})
+            label = response.json()
+            label_id = label.get("id")
+            return int(label_id) if label_id is not None else None
+        except requests.RequestException:
+            return None
 
     def list_labels(self) -> list[dict[str, Any]]:
         """List all labels with their IDs."""
         try:
-            response = requests.get(
-                f"{SHORTCUT_API_URL}/labels",
-                headers=self._headers,
-                timeout=30,
-            )
-            response.raise_for_status()
+            response = self._request("GET", "/labels")
             labels = response.json()
             return [
                 {
@@ -243,26 +333,22 @@ class ShortcutTracker(TrackerBase):
                 }
                 for label in labels
             ]
-        except Exception:
+        except requests.RequestException:
             return []
 
     def _get_workflow_state_id(self, state_name: str) -> int | None:
         """Resolve workflow state name to state ID."""
         try:
-            response = requests.get(
-                f"{SHORTCUT_API_URL}/workflows",
-                headers=self._headers,
-                timeout=30,
-            )
-            response.raise_for_status()
+            response = self._request("GET", "/workflows")
             workflows = response.json()
             # Search all workflows for matching state
             for workflow in workflows:
                 for state in workflow.get("states", []):
                     if state.get("name", "").lower() == state_name.lower():
-                        return state.get("id")
+                        state_id = state.get("id")
+                        return int(state_id) if state_id is not None else None
             return None
-        except Exception:
+        except requests.RequestException:
             return None
 
     def _parse_story(self, story: dict) -> Ticket:

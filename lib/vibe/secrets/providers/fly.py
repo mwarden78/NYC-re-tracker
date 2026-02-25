@@ -72,6 +72,7 @@ class FlySecretsProvider(SecretProvider):
                     name=s.get("Name", ""),
                     value="<hidden>",  # Fly doesn't expose values
                     environment=environment or "production",
+                    provider="fly",
                 )
                 for s in secrets_data
             ]
@@ -153,7 +154,7 @@ class FlySecretsProvider(SecretProvider):
             try:
                 success = self.set_secret(name, value, environment)
                 results[name] = success
-            except Exception:
+            except (subprocess.CalledProcessError, OSError, RuntimeError):
                 results[name] = False
 
         return results

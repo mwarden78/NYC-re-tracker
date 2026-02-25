@@ -1,0 +1,15 @@
+---
+description: When debugging CI failures, read the actual failure (PR comments, logs) first
+alwaysApply: true
+---
+
+# Debugging CI Failures
+
+When a user reports failing CI checks on a PR:
+
+1. **Read the actual failure first.** Do not guess the cause from workflow names.
+2. **Check PR comments and review threads** – CodeQL and other checks post inline comments (e.g. from `github-advanced-security`). Read them for the exact finding (query ID, file, line).
+3. **Check the PR policy bot comment** – It lists missing items (ticket reference, risk label).
+4. **Use failed run logs** – `gh pr checks <number>` then `gh run view <run-id> --log-failed` (or open the failed job in the Checks tab).
+
+Only after you know the real failure (e.g. "CodeQL py/incomplete-url-substring-sanitization on line 45", "missing risk label") should you implement a fix.

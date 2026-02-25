@@ -89,9 +89,43 @@ class TrackerBase(ABC):
         """Update an existing ticket."""
         pass
 
+    @staticmethod
+    def _normalize_labels(label_names: list[str]) -> list[str]:
+        """Split comma-separated label strings into individual labels.
+
+        Handles the case where callers pass ["Bug,Frontend,Low Risk"] as a
+        single string instead of separate strings.
+        """
+        normalized: list[str] = []
+        for name in label_names:
+            parts = [part.strip() for part in name.split(",")]
+            normalized.extend(part for part in parts if part)
+        return normalized
+
     def comment_ticket(self, ticket_id: str, body: str) -> None:
         """Add a comment to a ticket. Override in trackers that support comments."""
         raise NotImplementedError(f"Commenting is not supported by the {self.name} tracker.")
+
+    def set_parent(self, ticket_id: str, parent_id: str) -> None:
+        """Set a parent relationship (make ticket_id a sub-task of parent_id).
+
+        Override in trackers that support hierarchical relationships.
+        """
+        raise NotImplementedError(
+            f"Parent relationships are not supported by the {self.name} tracker."
+        )
+
+    def add_relation(self, ticket_id: str, related_id: str, relation_type: str = "related") -> None:
+        """Create a non-hierarchical relationship between two tickets.
+
+        Args:
+            ticket_id: First ticket identifier
+            related_id: Second ticket identifier
+            relation_type: Type of relation (e.g. "related", "blocks")
+
+        Override in trackers that support issue relations.
+        """
+        raise NotImplementedError(f"Issue relations are not supported by the {self.name} tracker.")
 
     @abstractmethod
     def validate_config(self) -> tuple[bool, list[str]]:

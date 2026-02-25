@@ -11,15 +11,12 @@ on:
 
 permissions:
   contents: read
+  security-events: write
 
 jobs:
   gitleaks:
     name: Secret Scanning
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      security-events: write
-      pull-requests: read
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -88,20 +85,18 @@ jobs:
   codeql:
     name: CodeQL Analysis
     runs-on: ubuntu-latest
-    continue-on-error: true
     permissions:
-      contents: read
       security-events: write
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4
         with:
           languages: python
+          # Python is interpreted; skip autobuild to avoid "No source code seen" failures
           build-mode: none
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
-
+        uses: github/codeql-action/analyze@v4

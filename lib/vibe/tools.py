@@ -7,6 +7,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any
 
 
 class ToolStatus(Enum):
@@ -43,7 +44,7 @@ def get_platform() -> str:
 
 
 # Tool definitions with install instructions per platform
-TOOL_DEFINITIONS = {
+TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
     "git": {
         "commands": ["git"],
         "version_flag": "--version",
@@ -452,7 +453,7 @@ def get_default_branch() -> str:
         if result.returncode == 0:
             # Output is like "refs/remotes/origin/main"
             return result.stdout.strip().split("/")[-1]
-    except Exception:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
         pass
 
     # Try to check if main exists
@@ -465,7 +466,7 @@ def get_default_branch() -> str:
         )
         if result.returncode == 0:
             return "main"
-    except Exception:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
         pass
 
     # Check for master
@@ -478,7 +479,7 @@ def get_default_branch() -> str:
         )
         if result.returncode == 0:
             return "master"
-    except Exception:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
         pass
 
     # Default to main

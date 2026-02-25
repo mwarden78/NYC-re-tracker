@@ -1,0 +1,29 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/linear-start-ticket.sh",
+            "statusMessage": "Checking for Linear ticket...",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash(git commit*)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/linear-update-on-commit.sh",
+            "statusMessage": "Updating Linear ticket status...",
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
+}

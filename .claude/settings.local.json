@@ -40,7 +40,17 @@
       "Bash(set:*)",
       "Bash(bash /c/Users/mward/NYC-re-tracker/bin/ticket get TES-30)",
       "Bash(python:*)",
-      "Bash(bin/vibe do:*)"
+      "Bash(bin/vibe do:*)",
+      "Bash(curl -s -X POST https://api.linear.app/graphql -H \"Authorization: lin_api_unrSxbBaCxw1UyvPxzVPjC52dSgK51tpESPzuBjR\" -H \"Content-Type: application/json\" -d '{:*)",
+      "Bash(python3:*)",
+      "Bash(git -C /c/Users/mward/NYC-re-tracker worktree add ../NYC-re-tracker-worktrees/TES-38 -b TES-38 origin/main)",
+      "Bash(git -C /c/Users/mward/NYC-re-tracker-worktrees/TES-38 add data/ingest_nyc_open_data.py)",
+      "Bash(gh run view:*)",
+      "Bash(gh run list:*)",
+      "Bash(gh pr edit:*)",
+      "Bash(gh api:*)",
+      "Bash(cat:*)",
+      "Bash(bin/vibe doctor:*)"
     ]
   }
 }

@@ -1,11 +1,16 @@
 """Linear.app ticket tracker integration."""
 
+import logging
 import os
 from typing import Any
 
 import requests
 
 from lib.vibe.trackers.base import Project, Ticket, TrackerBase
+from lib.vibe.utils.cache import get_cache
+from lib.vibe.utils.retry import with_retry
+
+logger = logging.getLogger(__name__)
 
 LINEAR_API_URL = "https://api.linear.app/graphql"
 
@@ -61,10 +66,11 @@ class LinearTracker(TrackerBase):
         try:
             response = self._execute_query(query)
             return "viewer" in response.get("data", {})
-        except Exception:
+        except requests.RequestException:
             return False
 
-    def _execute_query(self, query: str, variables: dict | None = None) -> dict:
+    @with_retry()
+    def _execute_query(self, query: str, variables: dict | None = None) -> dict[str, Any]:
         """Execute a GraphQL query against Linear API."""
         payload: dict[str, Any] = {"query": query}
         if variables:
@@ -72,7 +78,8 @@ class LinearTracker(TrackerBase):
 
         response = requests.post(LINEAR_API_URL, headers=self._headers, json=payload, timeout=30)
         response.raise_for_status()
-        return response.json()
+        result: dict[str, Any] = response.json()
+        return result
 
     def get_ticket(self, ticket_id: str, include_children: bool = False) -> Ticket | None:
         """Fetch a single ticket by ID or identifier.
@@ -122,7 +129,7 @@ class LinearTracker(TrackerBase):
             if not issue:
                 return None
             return self._parse_issue(issue, include_children=include_children)
-        except Exception:
+        except (requests.RequestException, KeyError):
             return None
 
     def list_tickets(
@@ -136,7 +143,7 @@ class LinearTracker(TrackerBase):
         assignee: str | None = None,
         unassigned: bool = False,
     ) -> list[Ticket]:
-        """List tickets with optional filters.
+        """List tickets with optional filters, with automatic pagination.
 
         Args:
             status: Filter by status name (e.g., "In Progress", "Done")
@@ -149,8 +156,8 @@ class LinearTracker(TrackerBase):
             unassigned: If True, show only unassigned tickets
         """
         query = """
-        query ListIssues($first: Int!, $filter: IssueFilter) {
-            issues(first: $first, filter: $filter) {
+        query ListIssues($first: Int!, $after: String, $filter: IssueFilter) {
+            issues(first: $first, after: $after, filter: $filter) {
                 nodes {
                     id
                     identifier
@@ -163,6 +170,10 @@ class LinearTracker(TrackerBase):
                     assignee { name }
                     project { name }
                     parent { identifier }
+                }
+                pageInfo {
+                    hasNextPage
+                    endCursor
                 }
             }
         }
@@ -204,16 +215,38 @@ class LinearTracker(TrackerBase):
                 if user_id:
                     filter_obj["assignee"] = {"id": {"eq": user_id}}
 
-        variables: dict[str, Any] = {"first": limit}
-        if filter_obj:
-            variables["filter"] = filter_obj
+        all_tickets: list[Ticket] = []
+        cursor: str | None = None
+        page_size = min(limit, 50)  # Linear max per page is 50
 
         try:
-            result = self._execute_query(query, variables)
-            issues = result.get("data", {}).get("issues", {}).get("nodes", [])
-            return [self._parse_issue(issue) for issue in issues]
-        except Exception:
-            return []
+            while True:
+                variables: dict[str, Any] = {"first": page_size}
+                if cursor:
+                    variables["after"] = cursor
+                if filter_obj:
+                    variables["filter"] = filter_obj
+
+                result = self._execute_query(query, variables)
+                data = result.get("data", {}).get("issues", {})
+                issues = data.get("nodes", [])
+                page_info = data.get("pageInfo", {})
+
+                all_tickets.extend(self._parse_issue(issue) for issue in issues)
+
+                if len(all_tickets) >= limit:
+                    return all_tickets[:limit]
+
+                if not page_info.get("hasNextPage", False):
+                    break
+
+                cursor = page_info.get("endCursor")
+                if not cursor:
+                    break
+
+            return all_tickets
+        except requests.RequestException:
+            return all_tickets  # Return what we have so far
 
     def create_ticket(
         self,
@@ -267,7 +300,7 @@ class LinearTracker(TrackerBase):
         if self._team_id:
             input_obj["teamId"] = self._team_id
         if labels:
-            label_ids = self._get_label_ids(self._team_id, labels)
+            label_ids = self._get_or_create_label_ids(self._team_id, labels)
             if label_ids:
                 input_obj["labelIds"] = label_ids
 
@@ -352,11 +385,21 @@ class LinearTracker(TrackerBase):
             input_obj["title"] = title
         if description:
             input_obj["description"] = description
+
+        # Always resolve identifier to UUID – the issueUpdate mutation
+        # requires the internal UUID, not the human-readable identifier
+        # (e.g. "PROJ-123").  The issue() *query* accepts either form,
+        # but mutations do not, so we must resolve up front.  This also
+        # gives us team_id for status/label resolution.
+        issue = self.get_ticket(ticket_id)
+        if not issue:
+            raise RuntimeError(f"Ticket not found: {ticket_id}")
+        issue_uuid = issue.raw.get("id")
+        if not issue_uuid:
+            raise RuntimeError(f"Ticket {ticket_id} has no internal UUID; cannot update")
+
         if status:
             # Resolve status name to workflow state ID
-            issue = self.get_ticket(ticket_id)
-            if not issue:
-                raise RuntimeError(f"Ticket not found: {ticket_id}")
             team_id = (issue.raw.get("team") or {}).get("id") or self._team_id
             if not team_id:
                 raise RuntimeError("Cannot resolve status: issue has no team")
@@ -367,6 +410,13 @@ class LinearTracker(TrackerBase):
                     "Check state name in Linear (e.g. Done, Canceled, In Progress)."
                 )
             input_obj["stateId"] = state_id
+
+        if labels:
+            team_id = (issue.raw.get("team") or {}).get("id") or self._team_id
+            if team_id:
+                label_ids = self._get_or_create_label_ids(team_id, labels)
+                if label_ids:
+                    input_obj["labelIds"] = label_ids
 
         # Project support
         if remove_project:
@@ -429,7 +479,7 @@ class LinearTracker(TrackerBase):
             }
         }
         """
-        result = self._execute_query(mutation, {"id": ticket_id, "input": input_obj})
+        result = self._execute_query(mutation, {"id": issue_uuid, "input": input_obj})
         issue = result.get("data", {}).get("issueUpdate", {}).get("issue")
         if not issue:
             raise RuntimeError("Failed to update ticket")
@@ -476,26 +526,116 @@ class LinearTracker(TrackerBase):
         """Resolve label names to Linear label IDs for the team."""
         if not team_id or not label_names:
             return []
+        label_names = self._normalize_labels(label_names)
+
+        # Try cache first
+        cache = get_cache()
+        cache_key = f"linear_labels_{team_id}"
+        cached_labels = cache.get(cache_key)
+
+        if cached_labels is not None:
+            name_to_id = {n["name"].lower(): n["id"] for n in cached_labels}
+            return [name_to_id[n.lower()] for n in label_names if n.lower() in name_to_id]
+
         query = """
         query TeamLabels($teamId: String!) {
             team(id: $teamId) {
-                labels { nodes { id name } }
+                labels(first: 250) { nodes { id name } }
             }
         }
         """
         try:
             result = self._execute_query(query, {"teamId": team_id})
             nodes = result.get("data", {}).get("team", {}).get("labels", {}).get("nodes", [])
-            name_to_id = {n.get("name", ""): n["id"] for n in nodes if n.get("id")}
-            return [name_to_id[n] for n in label_names if n in name_to_id]
-        except Exception:
+
+            # Cache the raw label data
+            cache.set(
+                cache_key,
+                [{"name": n.get("name", ""), "id": n["id"]} for n in nodes if n.get("id")],
+            )
+
+            name_to_id = {n.get("name", "").lower(): n["id"] for n in nodes if n.get("id")}
+            return [name_to_id[n.lower()] for n in label_names if n.lower() in name_to_id]
+        except requests.RequestException:
             return []
+
+    def _get_or_create_label_ids(self, team_id: str | None, label_names: list[str]) -> list[str]:
+        """Resolve label names to IDs, creating any that don't exist."""
+        if not team_id or not label_names:
+            return []
+        label_names = self._normalize_labels(label_names)
+        # First try to resolve all labels (uses cache internally)
+        existing_ids = self._get_label_ids(team_id, label_names)
+        if len(existing_ids) == len(label_names):
+            return existing_ids
+
+        # Some labels are missing — figure out which ones and create them.
+        # Invalidate cache since we know it's stale (missing labels).
+        cache = get_cache()
+        cache_key = f"linear_labels_{team_id}"
+        cache.invalidate(cache_key)
+
+        query = """
+        query TeamLabels($teamId: String!) {
+            team(id: $teamId) {
+                labels(first: 250) { nodes { id name } }
+            }
+        }
+        """
+        try:
+            result = self._execute_query(query, {"teamId": team_id})
+            nodes = result.get("data", {}).get("team", {}).get("labels", {}).get("nodes", [])
+            name_to_id = {n.get("name", "").lower(): n["id"] for n in nodes if n.get("id")}
+
+            label_ids = []
+            created_any = False
+            for name in label_names:
+                if name.lower() in name_to_id:
+                    label_ids.append(name_to_id[name.lower()])
+                else:
+                    new_id = self._create_label(team_id, name)
+                    if new_id:
+                        label_ids.append(new_id)
+                        created_any = True
+                    else:
+                        logger.warning("Failed to create label '%s' for team %s", name, team_id)
+
+            # Re-cache the updated label set if we created new labels
+            if created_any:
+                cache.invalidate(cache_key)
+
+            if len(label_ids) < len(label_names):
+                applied = len(label_ids)
+                requested = len(label_names)
+                logger.warning("Only %d of %d requested labels were applied", applied, requested)
+
+            return label_ids
+        except requests.RequestException:
+            logger.warning("Failed to resolve labels due to API error")
+            return existing_ids
+
+    def _create_label(self, team_id: str, name: str) -> str | None:
+        """Create a label in Linear and return its ID."""
+        mutation = """
+        mutation CreateLabel($input: IssueLabelCreateInput!) {
+            issueLabelCreate(input: $input) {
+                success
+                issueLabel { id name }
+            }
+        }
+        """
+        try:
+            result = self._execute_query(mutation, {"input": {"name": name, "teamId": team_id}})
+            label = result.get("data", {}).get("issueLabelCreate", {}).get("issueLabel")
+            return label.get("id") if label else None
+        except requests.RequestException:
+            return None
 
     def list_labels(self) -> list[dict[str, str]]:
         """List all labels with their IDs for the configured team."""
         query = """
         query ListLabels($teamId: String) {
-            issueLabels(filter: { team: { id: { eq: $teamId } } }, first: 100) {
+            issueLabels(filter: { team: { id: { eq: $teamId } } }, first: 250) {
                 nodes {
                     id
                     name
@@ -519,11 +659,22 @@ class LinearTracker(TrackerBase):
                 }
                 for node in nodes
             ]
-        except Exception:
+        except requests.RequestException:
             return []
 
     def _get_workflow_state_id(self, team_id: str, state_name: str) -> str | None:
         """Resolve workflow state name to state ID for a team."""
+        cache = get_cache()
+        cache_key = f"linear_states_{team_id}"
+        cached_states = cache.get(cache_key)
+
+        if cached_states is not None:
+            for s in cached_states:
+                if s.get("name", "").lower() == state_name.lower():
+                    state_id: str | None = s.get("id")
+                    return state_id
+            return None
+
         query = """
         query WorkflowStates($teamId: String!) {
             team(id: $teamId) {
@@ -539,11 +690,19 @@ class LinearTracker(TrackerBase):
         try:
             result = self._execute_query(query, {"teamId": team_id})
             nodes = result.get("data", {}).get("team", {}).get("states", {}).get("nodes", [])
+
+            # Cache the states
+            cache.set(
+                cache_key,
+                [{"id": n.get("id", ""), "name": n.get("name", "")} for n in nodes],
+            )
+
             for node in nodes:
                 if node.get("name", "").lower() == state_name.lower():
-                    return node.get("id")
+                    node_id: str | None = node.get("id")
+                    return node_id
             return None
-        except Exception:
+        except requests.RequestException:
             return None
 
     def create_relation(
@@ -597,10 +756,64 @@ class LinearTracker(TrackerBase):
 
         try:
             result = self._execute_query(mutation, {"input": input_obj})
-            success = result.get("data", {}).get("issueRelationCreate", {}).get("success", False)
+            success: bool = (
+                result.get("data", {}).get("issueRelationCreate", {}).get("success", False)
+            )
             return success
-        except Exception as e:
+        except requests.RequestException as e:
             raise RuntimeError(f"Failed to create relation: {e}") from e
+
+    def set_parent(self, ticket_id: str, parent_id: str) -> None:
+        """Set a parent relationship (make ticket_id a sub-task of parent_id).
+
+        Uses the Linear issueUpdate mutation to set the parentId field.
+
+        Args:
+            ticket_id: The child ticket identifier (e.g. "PROJ-101")
+            parent_id: The parent ticket identifier (e.g. "PROJ-100")
+        """
+        child = self.get_ticket(ticket_id)
+        if not child:
+            raise RuntimeError(f"Ticket not found: {ticket_id}")
+
+        parent = self.get_ticket(parent_id)
+        if not parent:
+            raise RuntimeError(f"Parent ticket not found: {parent_id}")
+
+        child_uuid = child.raw.get("id")
+        parent_uuid = parent.raw.get("id")
+        if not child_uuid or not parent_uuid:
+            raise RuntimeError("Cannot set parent: missing issue UUIDs")
+
+        mutation = """
+        mutation UpdateIssue($id: String!, $input: IssueUpdateInput!) {
+            issueUpdate(id: $id, input: $input) {
+                success
+            }
+        }
+        """
+        try:
+            result = self._execute_query(
+                mutation,
+                {"id": child_uuid, "input": {"parentId": parent_uuid}},
+            )
+            success = result.get("data", {}).get("issueUpdate", {}).get("success", False)
+            if not success:
+                raise RuntimeError(f"Failed to set parent for {ticket_id}")
+        except requests.RequestException as e:
+            raise RuntimeError(f"Failed to set parent: {e}") from e
+
+    def add_relation(self, ticket_id: str, related_id: str, relation_type: str = "related") -> None:
+        """Create a non-hierarchical relationship between two Linear issues.
+
+        Delegates to create_relation with the appropriate relation_type.
+
+        Args:
+            ticket_id: First ticket identifier
+            related_id: Second ticket identifier
+            relation_type: Type of relation ("related" or "blocks")
+        """
+        self.create_relation(ticket_id, related_id, relation_type)
 
     def _parse_issue(self, issue: dict, include_children: bool = False) -> Ticket:
         """Parse a Linear issue into a Ticket."""
@@ -676,7 +889,7 @@ class LinearTracker(TrackerBase):
             result = self._execute_query(query, variables)
             nodes = result.get("data", {}).get("projects", {}).get("nodes", [])
             return [self._parse_project(p) for p in nodes]
-        except Exception:
+        except requests.RequestException:
             return []
 
     def get_project(self, project_id: str) -> Project | None:
@@ -704,7 +917,7 @@ class LinearTracker(TrackerBase):
             project = result.get("data", {}).get("project")
             if project:
                 return self._parse_project(project)
-        except Exception:
+        except requests.RequestException:
             pass
 
         # Try by name
@@ -780,6 +993,14 @@ class LinearTracker(TrackerBase):
 
     def _get_viewer_id(self) -> str | None:
         """Get the current authenticated user's ID."""
+        cache = get_cache()
+        cache_key = "linear_viewer"
+        cached_viewer = cache.get(cache_key)
+
+        if cached_viewer is not None:
+            result_viewer: str = cached_viewer
+            return result_viewer
+
         query = """
         query {
             viewer {
@@ -789,8 +1010,11 @@ class LinearTracker(TrackerBase):
         """
         try:
             result = self._execute_query(query)
-            return result.get("data", {}).get("viewer", {}).get("id")
-        except Exception:
+            viewer_id: str | None = result.get("data", {}).get("viewer", {}).get("id")
+            if viewer_id:
+                cache.set(cache_key, viewer_id, ttl=1800)  # 30 min TTL
+            return viewer_id
+        except requests.RequestException:
             return None
 
     def _get_user_id_by_name(self, name: str) -> str | None:
@@ -817,13 +1041,22 @@ class LinearTracker(TrackerBase):
                     or user.get("email", "").lower() == name_lower
                     or user.get("displayName", "").lower() == name_lower
                 ):
-                    return user.get("id")
+                    user_id: str | None = user.get("id")
+                    return user_id
             return None
-        except Exception:
+        except requests.RequestException:
             return None
 
     def list_users(self) -> list[dict[str, str]]:
         """List all users in the organization."""
+        cache = get_cache()
+        cache_key = "linear_users"
+        cached_users = cache.get(cache_key)
+
+        if cached_users is not None:
+            users_result: list[dict[str, str]] = cached_users
+            return users_result
+
         query = """
         query {
             users {
@@ -840,7 +1073,7 @@ class LinearTracker(TrackerBase):
         try:
             result = self._execute_query(query)
             users = result.get("data", {}).get("users", {}).get("nodes", [])
-            return [
+            user_list = [
                 {
                     "id": u.get("id", ""),
                     "name": u.get("name", ""),
@@ -850,5 +1083,7 @@ class LinearTracker(TrackerBase):
                 }
                 for u in users
             ]
-        except Exception:
+            cache.set(cache_key, user_list, ttl=1800)  # 30 min TTL
+            return user_list
+        except requests.RequestException:
             return []

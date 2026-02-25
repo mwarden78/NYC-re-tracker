@@ -82,8 +82,9 @@ def get_app_name() -> str | None:
         try:
             content = fly_toml.read_text()
             data = tomli.loads(content)
-            return data.get("app")
-        except Exception:
+            app_name: str | None = data.get("app")
+            return app_name
+        except (OSError, ValueError):
             pass
 
     # Fallback: simple parsing
@@ -91,7 +92,7 @@ def get_app_name() -> str | None:
         for line in fly_toml.read_text().split("\n"):
             if line.startswith("app ="):
                 return line.split("=")[1].strip().strip("\"'")
-    except Exception:
+    except OSError:
         pass
     return None
 
@@ -135,6 +136,7 @@ def run_fly_wizard(config: dict[str, Any]) -> bool:
 
     # Step 2: Check authentication
     click.echo("\nStep 2: Checking authentication...")
+    assert fly_cmd is not None  # Validated above
     if not check_fly_auth():
         click.echo("  Not authenticated with Fly.io.")
         if click.confirm("  Run 'fly auth login' now?", default=True):

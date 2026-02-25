@@ -65,6 +65,7 @@ def run_doctor(
     # Config-dependent checks
     if config_exists():
         config = load_config()
+        results.append(check_config_schema())
         results.append(check_tracker_config(config))
         results.append(check_github_config(config))
         results.append(check_secrets_allowlist())
@@ -81,6 +82,9 @@ def run_doctor(
         # Live integration checks (actual API calls)
         if live_checks:
             results.extend(run_live_validation_checks(config))
+
+    # direnv check
+    results.append(check_direnv())
 
     # Local hooks check
     results.append(check_local_hooks())
@@ -138,6 +142,28 @@ def check_config_exists() -> CheckResult:
         status=Status.FAIL,
         message=".vibe/config.json not found",
         fix_hint="Run 'bin/vibe setup' to create configuration",
+    )
+
+
+def check_config_schema() -> CheckResult:
+    """Validate config schema."""
+    from lib.vibe.config_schema import validate_config
+
+    config = load_config()
+    errors = validate_config(config)
+
+    if not errors:
+        return CheckResult(
+            name="Config schema",
+            status=Status.PASS,
+            message="Configuration is valid",
+        )
+
+    return CheckResult(
+        name="Config schema",
+        status=Status.WARN,
+        message=f"{len(errors)} issue(s): {errors[0]}",
+        fix_hint="Review .vibe/config.json for typos or missing fields",
     )
 
 
@@ -350,6 +376,51 @@ def check_secrets_allowlist() -> CheckResult:
     )
 
 
+def check_direnv() -> CheckResult:
+    """Check direnv configuration for automatic env variable loading."""
+    from lib.vibe.env import check_direnv_status
+
+    status = check_direnv_status()
+
+    if not status["envrc_exists"]:
+        return CheckResult(
+            name="direnv",
+            status=Status.SKIP,
+            message=".envrc not configured (optional)",
+            fix_hint="Run 'bin/vibe setup' to create .envrc for automatic env loading",
+        )
+
+    if not status["direnv_installed"]:
+        return CheckResult(
+            name="direnv",
+            status=Status.WARN,
+            message=".envrc exists but direnv is not installed",
+            fix_hint="Install direnv: https://direnv.net/docs/installation.html",
+        )
+
+    if status["direnv_allowed"] is False:
+        return CheckResult(
+            name="direnv",
+            status=Status.WARN,
+            message=".envrc exists but not allowed",
+            fix_hint="Run 'direnv allow' in the project root",
+        )
+
+    if status["direnv_allowed"] is True:
+        return CheckResult(
+            name="direnv",
+            status=Status.PASS,
+            message="direnv configured and allowed",
+        )
+
+    # Could not determine allow status
+    return CheckResult(
+        name="direnv",
+        status=Status.PASS,
+        message="direnv installed, .envrc exists",
+    )
+
+
 def check_local_hooks() -> CheckResult:
     """Check if local Claude Code hooks are configured."""
     hooks_file = Path(".claude/settings.local.json")
@@ -379,7 +450,7 @@ def check_local_hooks() -> CheckResult:
             message="File exists but no hooks defined",
             category="integration",
         )
-    except (json.JSONDecodeError, Exception) as e:
+    except (json.JSONDecodeError, OSError) as e:
         return CheckResult(
             name="Local hooks",
             status=Status.WARN,
@@ -425,7 +496,7 @@ def check_stale_worktrees() -> CheckResult:
             message=f"{len(worktrees)} active worktree(s)",
         )
 
-    except Exception:
+    except (subprocess.CalledProcessError, OSError):
         return CheckResult(
             name="Worktrees",
             status=Status.SKIP,
@@ -485,7 +556,7 @@ def check_integrations(config: dict, verbose: bool = False) -> list[CheckResult]
                         category="integration",
                     )
                 )
-        except Exception:
+        except (subprocess.CalledProcessError, OSError):
             results.append(
                 CheckResult(
                     name="Fly.io",
@@ -531,7 +602,7 @@ def check_integrations(config: dict, verbose: bool = False) -> list[CheckResult]
                         category="integration",
                     )
                 )
-        except Exception:
+        except (subprocess.CalledProcessError, OSError):
             results.append(
                 CheckResult(
                     name="Vercel",
@@ -836,7 +907,7 @@ def check_integration_freshness() -> CheckResult:
             fix_hint="Fix .vibe/integration-freshness.json syntax",
             category="integration",
         )
-    except Exception as e:
+    except OSError as e:
         return CheckResult(
             name="Integration freshness",
             status=Status.WARN,
@@ -903,7 +974,7 @@ def check_github_actions_setup() -> list[CheckResult]:
                 )
             )
 
-    except Exception as e:
+    except (subprocess.CalledProcessError, OSError) as e:
         results.append(
             CheckResult(
                 name="GitHub Secrets",
@@ -954,7 +1025,7 @@ def check_github_actions_setup() -> list[CheckResult]:
                 )
             )
 
-    except Exception:
+    except (subprocess.CalledProcessError, OSError, json.JSONDecodeError):
         results.append(
             CheckResult(
                 name="Recent workflows",
@@ -981,7 +1052,7 @@ def print_results(results: list[CheckResult], show_skipped: bool = True) -> int:
     has_failure = False
 
     # Group by category
-    categories = {}
+    categories: dict[str, list[CheckResult]] = {}
     for result in results:
         cat = result.category
         if cat not in categories:
