@@ -12,8 +12,10 @@ from db import (
     load_saved_searches,
     mark_search_checked,
 )
+from sidebar import render_more_section
 
 st.set_page_config(page_title="Alerts | NYC RE Tracker", page_icon="🔔", layout="wide")
+render_more_section()
 
 st.title("Alerts")
 st.caption("Saved searches — get notified when new properties match your filters")
