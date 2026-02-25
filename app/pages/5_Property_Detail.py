@@ -203,6 +203,51 @@ with notes_col:
 st.divider()
 
 # ---------------------------------------------------------------------------
+# Walk / Transit / Bike Scores (TES-47)
+# ---------------------------------------------------------------------------
+walk_score = prop.get("walk_score")
+transit_score = prop.get("transit_score")
+bike_score = prop.get("bike_score")
+
+_has_scores = any(v is not None for v in [walk_score, transit_score, bike_score])
+
+def _score_color(score: int | None) -> str:
+    if score is None:
+        return "#6b7280"
+    if score >= 90:
+        return "#15803d"
+    if score >= 70:
+        return "#16a34a"
+    if score >= 50:
+        return "#ca8a04"
+    return "#dc2626"
+
+def _score_badge(label: str, score: int | None, icon: str) -> str:
+    color = _score_color(score)
+    val = str(score) if score is not None else "—"
+    return (
+        f"<div style='text-align:center'>"
+        f"<div style='font-size:2rem;font-weight:700;color:{color}'>{val}</div>"
+        f"<div style='font-size:0.75rem;color:#9ca3af'>{icon} {label}</div>"
+        f"</div>"
+    )
+
+with st.expander("🚶 Walkability Scores", expanded=_has_scores):
+    if not _has_scores:
+        st.info(
+            "No walkability scores yet. Run `python data/enrich_walk_score.py` "
+            "after adding your `WALKSCORE_API_KEY` to `.env`."
+        )
+    else:
+        ws1, ws2, ws3 = st.columns(3)
+        ws1.markdown(_score_badge("Walk Score", walk_score, "🚶"), unsafe_allow_html=True)
+        ws2.markdown(_score_badge("Transit Score", transit_score, "🚇"), unsafe_allow_html=True)
+        ws3.markdown(_score_badge("Bike Score", bike_score, "🚴"), unsafe_allow_html=True)
+        st.caption("Scores 0–100 · 90+ Walker's/Rider's/Biker's Paradise · 70–89 Very walkable/bikeable · 50–69 Somewhat · <50 Car-dependent · Powered by [Walk Score](https://www.walkscore.com/)")
+
+st.divider()
+
+# ---------------------------------------------------------------------------
 # Parcel & Market Data (PLUTO + ACRIS enrichment — TES-37)
 # ---------------------------------------------------------------------------
 assessed_value = prop.get("assessed_value")

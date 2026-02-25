@@ -390,6 +390,7 @@ for p in properties:
     deal_type = p.get("deal_type", "")
     idx = len(rows)
     prop_by_index[idx] = p
+    walk = p.get("walk_score")
     rows.append({
         "lat": float(lat),
         "lng": float(lng),
@@ -401,6 +402,7 @@ for p in properties:
         "pipeline": tracked.get(p["id"], ""),
         "color": DEAL_COLORS.get(deal_type, [100, 100, 100, 180]),
         "last_sale_fmt": _fmt_last_sale(last_sales.get(p["id"])),
+        "walk_score_fmt": f"🚶 {walk}" if walk is not None else "",
     })
 
 if not rows:
@@ -575,7 +577,7 @@ else:
         auto_highlight=True,
     )
     tooltip = {
-        "html": "<b>{address}</b><br/>{deal_label} · {borough}<br/>Price: {price_fmt}<br/>Last sale: {last_sale_fmt}<br/>Pipeline: {pipeline_fmt}",
+        "html": "<b>{address}</b><br/>{deal_label} · {borough}<br/>Price: {price_fmt}<br/>Last sale: {last_sale_fmt}<br/>Pipeline: {pipeline_fmt}<br/>{walk_score_fmt}",
         "style": {"backgroundColor": "#1e293b", "color": "white",
                   "fontSize": "13px", "padding": "8px", "borderRadius": "4px"},
     }
