@@ -35,7 +35,7 @@ from typing import Optional
 import requests
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from utils.supabase_client import get_client  # noqa: E402
+from utils.supabase_client import get_client, fetch_all_rows  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -156,15 +156,15 @@ def parse_pluto_row(row: dict) -> dict:
 def enrich(limit: Optional[int] = None, dry_run: bool = False, force: bool = False) -> None:
     client = get_client()
 
-    # Load properties that have a BBL
+    # Load properties that have a BBL (paginate past Supabase's 1000-row limit)
     query = client.table("properties").select("id,address,borough,bbl").not_.is_("bbl", "null")
     if not force:
         # Skip rows where we've already enriched (assessed_value is a reliable proxy)
         query = query.is_("assessed_value", "null")
     if limit:
-        query = query.limit(limit)
-
-    rows = query.execute().data
+        rows = query.limit(limit).execute().data
+    else:
+        rows = fetch_all_rows(query)
     log.info("Found %d properties to enrich", len(rows))
 
     if not rows:

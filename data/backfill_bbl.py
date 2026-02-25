@@ -24,7 +24,7 @@ from typing import Optional
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from data.ingest_nyc_open_data import extract_bbl_from_feature, geosearch_feature  # noqa: E402
-from utils.supabase_client import get_client  # noqa: E402
+from utils.supabase_client import get_client, fetch_all_rows  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,8 +43,9 @@ def backfill(limit: Optional[int] = None, dry_run: bool = False) -> None:
         .is_("bbl", "null")
     )
     if limit:
-        query = query.limit(limit)
-    rows = query.execute().data
+        rows = query.limit(limit).execute().data
+    else:
+        rows = fetch_all_rows(query)
 
     log.info("Found %d properties with null bbl", len(rows))
 
