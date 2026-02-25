@@ -125,6 +125,20 @@ def load_violations_by_property(property_id: str) -> list[dict]:
 
 
 @st.cache_data(ttl=_TTL)
+def load_lien_history_by_property(property_id: str) -> list[dict]:
+    """Return prior lien history for a single property, newest notice first."""
+    client = get_client()
+    result = (
+        client.table("lien_history")
+        .select("*")
+        .eq("property_id", property_id)
+        .order("notice_month", desc=True)
+        .execute()
+    )
+    return result.data or []
+
+
+@st.cache_data(ttl=_TTL)
 def load_violation_counts(open_only: bool = False) -> dict[str, int]:
     """Return {property_id: violation_count} for all properties with violations.
 

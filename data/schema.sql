@@ -137,6 +137,25 @@ CREATE TABLE IF NOT EXISTS sale_history (
 CREATE INDEX IF NOT EXISTS idx_sale_history_property_id ON sale_history(property_id);
 CREATE INDEX IF NOT EXISTS idx_sale_history_sale_date ON sale_history(sale_date DESC);
 
+-- Lien history table: prior DOF tax lien notices for properties (TES-40)
+CREATE TABLE IF NOT EXISTS lien_history (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    property_id     UUID NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+    bbl             TEXT NOT NULL,               -- 10-digit BBL
+    tax_class       TEXT,                        -- '1', '2', '3', '4'
+    building_class  TEXT,                        -- e.g. 'A1', 'D4'
+    lien_cycle      TEXT,                        -- e.g. '90 Day Notice', 'In Rem'
+    water_debt_only BOOLEAN DEFAULT FALSE,
+    lien_amount     NUMERIC,
+    notice_month    TEXT,                        -- YYYY-MM-DD from DOF 'month' field
+    source_row_id   TEXT,
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (property_id, source_row_id)
+);
+CREATE INDEX IF NOT EXISTS idx_lien_history_property_id  ON lien_history(property_id);
+CREATE INDEX IF NOT EXISTS idx_lien_history_bbl          ON lien_history(bbl);
+CREATE INDEX IF NOT EXISTS idx_lien_history_notice_month ON lien_history(notice_month DESC);
+
 -- Saved searches table: user-saved filter configurations for deal alerts
 CREATE TABLE IF NOT EXISTS saved_searches (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
