@@ -120,8 +120,12 @@ _DEFAULT_TRANSIT_COLOR = [128, 129, 131, 210]
 
 @st.cache_data(ttl=86400, show_spinner="Loading subway lines…")
 def _load_subway_lines() -> list[dict]:
-    """Fetch NYC subway lines GeoJSON from NYC Open Data (cached 24 h)."""
-    url = "https://data.cityofnewyork.us/api/geospatial/s7zz-qmyz?method=export&type=GeoJSON"
+    """Fetch NYC subway lines GeoJSON from NY State Open Data (cached 24 h).
+
+    Dataset: MTA Subway Service Lines (s692-irgq) on data.ny.gov
+    Moved from data.cityofnewyork.us in 2024.
+    """
+    url = "https://data.ny.gov/resource/s692-irgq.geojson"
     resp = requests.get(url, timeout=15)
     resp.raise_for_status()
     geojson = resp.json()
@@ -129,7 +133,7 @@ def _load_subway_lines() -> list[dict]:
     paths = []
     for feature in geojson.get("features", []):
         props = feature.get("properties", {})
-        route = (props.get("rt_symbol") or "").strip()
+        route = (props.get("service") or "").strip()
         color = _MTA_LINE_COLORS.get(route, _DEFAULT_TRANSIT_COLOR)
         geom = feature.get("geometry", {})
         geom_type = geom.get("type")
@@ -146,22 +150,26 @@ def _load_subway_lines() -> list[dict]:
 
 @st.cache_data(ttl=86400, show_spinner="Loading subway stations…")
 def _load_subway_stations() -> list[dict]:
-    """Fetch NYC subway stations from NYC Open Data (cached 24 h)."""
-    url = "https://data.cityofnewyork.us/resource/arq3-7z49.json?$limit=500"
+    """Fetch NYC subway stations from NY State Open Data (cached 24 h).
+
+    Dataset: MTA Subway Stations (39hk-dx4f) on data.ny.gov
+    Moved from data.cityofnewyork.us in 2024.
+    """
+    url = "https://data.ny.gov/resource/39hk-dx4f.json?$limit=500"
     resp = requests.get(url, timeout=15)
     resp.raise_for_status()
     data = resp.json()
 
     stations = []
     for s in data:
-        geom = s.get("the_geom")
-        if isinstance(geom, dict) and geom.get("type") == "Point":
-            lng, lat = geom["coordinates"]
+        lat = s.get("gtfs_latitude")
+        lng = s.get("gtfs_longitude")
+        if lat and lng:
             stations.append({
                 "lat": float(lat),
                 "lng": float(lng),
-                "name": s.get("name", ""),
-                "line": s.get("line", ""),
+                "name": s.get("stop_name", ""),
+                "line": s.get("daytime_routes", ""),
             })
     return stations
 
