@@ -48,7 +48,7 @@ log = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-PLUTO_DATASET_ID = "64uk-42yjx"
+PLUTO_DATASET_ID = "64uk-42ks"
 SODA_BASE = "https://data.cityofnewyork.us/resource"
 REQUEST_TIMEOUT = 30
 BATCH_SIZE = 100  # max BBLs per Socrata IN() query
@@ -93,7 +93,7 @@ def fetch_pluto_batch(bbls: list[str]) -> list[dict]:
     quoted = ", ".join(f"'{b}'" for b in bbls)
     params = {
         "$where": f"bbl IN ({quoted})",
-        "$select": "bbl,assesstot,fullval,unitsres,numfloors,landuse,zonedist1",
+        "$select": "bbl,assesstot,unitsres,numfloors,landuse,zonedist1",
         "$limit": len(bbls) + 10,  # small buffer in case of duplicates
     }
     url = f"{SODA_BASE}/{PLUTO_DATASET_ID}.json"
@@ -142,7 +142,6 @@ def parse_pluto_row(row: dict) -> dict:
 
     return {
         "assessed_value": _safe_numeric(row.get("assesstot")),
-        "market_value": _safe_numeric(row.get("fullval")),
         "num_units": _safe_int(row.get("unitsres")),
         "num_floors": _safe_int(row.get("numfloors")),
         "land_use": land_use_label,
@@ -190,7 +189,12 @@ def enrich(limit: Optional[int] = None, dry_run: bool = False, force: bool = Fal
         log.info("Fetching PLUTO batch %d/%d (%d BBLs)…", batch_num, total_batches, len(batch))
         pluto_rows = fetch_pluto_batch(batch)
         for pr in pluto_rows:
-            bbl = str(pr.get("bbl", "")).strip()
+            # PLUTO returns bbl as a float string e.g. "3002750022.00000000" — normalise to int string
+            raw_bbl = str(pr.get("bbl", "")).strip()
+            try:
+                bbl = str(int(float(raw_bbl))) if raw_bbl else ""
+            except (ValueError, TypeError):
+                bbl = raw_bbl
             if bbl:
                 pluto_by_bbl[bbl] = pr
         if batch_num < total_batches:
