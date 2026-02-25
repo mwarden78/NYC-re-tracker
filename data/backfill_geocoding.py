@@ -20,7 +20,7 @@ from typing import Optional
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from data.ingest_nyc_open_data import geocode_address  # noqa: E402
-from utils.supabase_client import get_client  # noqa: E402
+from utils.supabase_client import get_client, fetch_all_rows  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -39,9 +39,7 @@ def backfill(limit: Optional[int] = None, dry_run: bool = False) -> None:
         .select("id,address,borough,lat,bbl")
         .or_("lat.is.null,bbl.is.null")
     )
-    if limit:
-        query = query.limit(limit)
-    rows = query.execute().data
+    rows = query.limit(limit).execute().data if limit else fetch_all_rows(query)
 
     log.info("Found %d properties missing lat/lng or BBL", len(rows))
 

@@ -27,7 +27,7 @@ from typing import Optional
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from data.ingest_nyc_open_data import soda_get_all  # noqa: E402
-from utils.supabase_client import get_client         # noqa: E402
+from utils.supabase_client import get_client, fetch_all_rows  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -165,8 +165,8 @@ def load_properties(property_id: Optional[str] = None) -> list[dict]:
     client = get_client()
     query = client.table("properties").select("id,address,borough")
     if property_id:
-        query = query.eq("id", property_id)
-    return query.execute().data
+        return query.eq("id", property_id).execute().data or []
+    return fetch_all_rows(query)
 
 
 def run(source: str, property_id: Optional[str], dry_run: bool) -> None:

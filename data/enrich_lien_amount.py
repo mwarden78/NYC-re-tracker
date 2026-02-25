@@ -42,7 +42,7 @@ from typing import Optional
 import requests
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from utils.supabase_client import get_client  # noqa: E402
+from utils.supabase_client import get_client, fetch_all_rows  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -177,10 +177,7 @@ def enrich(
         query = query.eq("deal_type", "tax_lien")
     if not force:
         query = query.is_("lien_amount", "null")
-    if limit:
-        query = query.limit(limit)
-
-    rows = query.execute().data
+    rows = query.limit(limit).execute().data if limit else fetch_all_rows(query)
     log.info("Found %d properties to enrich with lien amount data", len(rows))
 
     if not rows:
