@@ -1,4 +1,4 @@
-"""Property Detail page — TES-19.
+"""Property Detail page — TES-19, TES-45.
 
 Navigated to via query param: ?property_id=<UUID>
 """
@@ -12,6 +12,7 @@ from db import (
     add_to_pipeline,
     load_deal_by_property,
     load_property_by_id,
+    load_sale_history,
     load_violations_by_property,
     update_deal_notes,
     update_deal_status,
@@ -296,6 +297,50 @@ with st.expander(expander_label, expanded=total_count > 0):
                             st.caption(f"Issued: {v['issued_date']}")
                         if v.get("description"):
                             st.caption(v["description"])
+
+# ---------------------------------------------------------------------------
+# Sale History (ACRIS — TES-45)
+# ---------------------------------------------------------------------------
+try:
+    sale_history = load_sale_history(property_id)
+except Exception as _e:
+    sale_history = []
+    st.warning(f"Could not load sale history: {_e}")
+
+_sh_count = len(sale_history)
+_sh_label = f"📋 Sale History ({_sh_count})" if _sh_count else "📋 Sale History"
+with st.expander(_sh_label, expanded=_sh_count > 0):
+    if not sale_history:
+        st.info("No deed sales found in ACRIS for this property.")
+    else:
+        # Most recent sale summary metrics
+        _recent = sale_history[0]  # already sorted DESC by sale_date
+        _rp = _recent.get("sale_price")
+        _rd = _recent.get("sale_date")
+        sh1, sh2, sh3 = st.columns(3)
+        sh1.metric("Last Sold", f"${_rp:,.0f}" if _rp else "—")
+        sh2.metric("Sale Date", _rd[:10] if _rd else "—")
+        sh3.metric("Buyer", _recent.get("buyer_name") or "—")
+
+        if _sh_count > 1:
+            st.divider()
+            st.caption("**Full Sale History**")
+
+        # Build and display full history table
+        _rows = []
+        for _s in sale_history:
+            _sd = _s.get("sale_date")
+            _sp = _s.get("sale_price")
+            _rows.append({
+                "Date": _sd[:10] if _sd else "—",
+                "Price": f"${_sp:,.0f}" if _sp else "—",
+                "Doc Type": _s.get("doc_type") or "—",
+                "Buyer": _s.get("buyer_name") or "—",
+                "Seller": _s.get("seller_name") or "—",
+            })
+        st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True)
+
+st.divider()
 
 # ---------------------------------------------------------------------------
 # Deal Calculator (TES-21)
