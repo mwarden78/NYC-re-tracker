@@ -48,5 +48,8 @@ coverage.xml
 htmlcov/
 .pytest_cache/
 
+# Training data (large files downloaded locally)
+data/training/
+
 # Logs
 *.log
