@@ -19,6 +19,9 @@ venv/
 .vibe/.venv/
 .vibe/local_state.json
 
+# Claude Code personal session state (contains auto-approved command history)
+.claude/settings.local.json
+
 # Streamlit
 .streamlit/secrets.toml
 

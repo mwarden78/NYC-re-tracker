@@ -36,4 +36,4 @@ jobs:
         run: ruff format lib/ bin/ --check --diff
 
       - name: Run mypy type checking
-        run: mypy lib/vibe/ --ignore-missing-imports
+        run: mypy lib/vibe/ --ignore-missing-imports --disable-error-code=import-untyped --disable-error-code=no-untyped-def

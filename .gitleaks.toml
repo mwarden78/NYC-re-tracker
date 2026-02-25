@@ -7,9 +7,11 @@ useDefault = true
 
 [allowlist]
 # Allow test files that may contain fake/mock API keys
+# Also allowlist Claude Code session files which contain auto-approved command history
 paths = [
     '''tests/.*\.py$''',
     '''test_.*\.py$''',
+    '''\.claude/settings\.local\.json$''',
 ]
 
 # Allow specific patterns used in tests
