@@ -1,3 +1,7 @@
+---
+description: Clean up worktrees for branches that have been merged
+---
+
 # /cleanup - Clean up merged worktrees
 
 Remove worktrees for branches that have been merged.

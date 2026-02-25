@@ -1,5 +1,5 @@
 {
-  "version": "1.0.0",
+  "version": 2,
   "project": {
     "name": "NYC RE Tracker",
     "repository": "NYC-re-tracker"
@@ -28,9 +28,27 @@
     "auto_cleanup": true
   },
   "labels": {
-    "type": ["Bug", "Feature", "Chore", "Refactor"],
-    "risk": ["Low Risk", "Medium Risk", "High Risk"],
-    "area": ["Frontend", "Backend", "Infra", "Docs"],
-    "special": ["HUMAN", "Milestone", "Blocked"]
+    "type": [
+      "Bug",
+      "Feature",
+      "Chore",
+      "Refactor"
+    ],
+    "risk": [
+      "Low Risk",
+      "Medium Risk",
+      "High Risk"
+    ],
+    "area": [
+      "Frontend",
+      "Backend",
+      "Infra",
+      "Docs"
+    ],
+    "special": [
+      "HUMAN",
+      "Milestone",
+      "Blocked"
+    ]
   }
 }

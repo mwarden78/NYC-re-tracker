@@ -5,6 +5,13 @@ import sys
 from pathlib import Path
 
 import click
+import requests
+
+# Auto-load .env files at startup (unless disabled)
+if os.environ.get("VIBE_NO_DOTENV") != "1":
+    from lib.vibe.env import auto_load_env
+
+    auto_load_env(verbose=os.environ.get("VIBE_VERBOSE") == "1")
 
 from lib.vibe.config import load_config, save_config
 from lib.vibe.deployment_followup import (
@@ -15,7 +22,7 @@ from lib.vibe.deployment_followup import (
 from lib.vibe.trackers.base import Ticket
 from lib.vibe.trackers.linear import LinearTracker
 from lib.vibe.trackers.shortcut import ShortcutTracker
-from lib.vibe.ui.components import NumberedMenu, ProgressIndicator
+from lib.vibe.ui.components import NumberedMenu, ProgressIndicator, Spinner
 from lib.vibe.wizards.tracker import run_tracker_wizard
 
 
@@ -87,10 +94,11 @@ def get(ticket_id: str, children: bool) -> None:
 
     try:
         # Use include_children if supported
-        if hasattr(tracker, "get_ticket") and children:
-            ticket = tracker.get_ticket(ticket_id, include_children=True)
-        else:
-            ticket = tracker.get_ticket(ticket_id)
+        with Spinner(f"Fetching ticket {ticket_id}"):
+            if hasattr(tracker, "get_ticket") and children:
+                ticket = tracker.get_ticket(ticket_id, include_children=True)
+            else:
+                ticket = tracker.get_ticket(ticket_id)
         if ticket:
             print_ticket(ticket, show_children=children)
         else:
@@ -104,7 +112,8 @@ def get(ticket_id: str, children: bool) -> None:
 @main.command("list")
 @click.option("--status", "-s", help="Filter by status")
 @click.option("--label", "-l", multiple=True, help="Filter by label")
-@click.option("--limit", "-n", default=10, help="Maximum tickets to show")
+@click.option("--limit", "-n", default=50, help="Maximum tickets to show (default: 50)")
+@click.option("--all", "fetch_all", is_flag=True, help="Fetch all matching tickets")
 @click.option("--project", "-p", help="Filter by project name")
 @click.option("--parent", help="Filter by parent ticket (show sub-tasks)")
 @click.option(
@@ -118,6 +127,7 @@ def list_tickets(
     status: str | None,
     label: tuple,
     limit: int,
+    fetch_all: bool,
     project: str | None,
     parent: str | None,
     priority: str | None,
@@ -134,15 +144,18 @@ def list_tickets(
         bin/ticket list --priority urgent
         bin/ticket list --assignee me
         bin/ticket list --unassigned
+        bin/ticket list --all  # Fetch all matching tickets
     """
     tracker = ensure_tracker_configured()
+
+    effective_limit = 10000 if fetch_all else limit
 
     try:
         # Build kwargs for trackers that support extended filters
         kwargs: dict = {
             "status": status,
             "labels": list(label) if label else None,
-            "limit": limit,
+            "limit": effective_limit,
         }
         # Add extended filters if supported
         if hasattr(tracker, "list_tickets"):
@@ -161,7 +174,8 @@ def list_tickets(
             if "unassigned" in params and unassigned:
                 kwargs["unassigned"] = unassigned
 
-        tickets = tracker.list_tickets(**kwargs)
+        with Spinner("Fetching tickets"):
+            tickets = tracker.list_tickets(**kwargs)
 
         if not tickets:
             click.echo("No tickets found.")
@@ -169,6 +183,12 @@ def list_tickets(
 
         for ticket in tickets:
             print_ticket_summary(ticket)
+
+        count = len(tickets)
+        if count >= effective_limit and not fetch_all:
+            click.echo(f"\nShowing {count} tickets. Use --all to fetch all matching tickets.")
+        else:
+            click.echo(f"\n{count} ticket(s) found.")
     except NotImplementedError as e:
         click.echo(str(e), err=True)
         sys.exit(1)
@@ -176,9 +196,10 @@ def list_tickets(
 
 @main.command()
 @click.argument("title", required=False)
-@click.option("--description", "-d", default="", help="Ticket description")
+@click.option("--description", "-d", default="", help="Ticket description (required)")
 @click.option("--label", "-l", multiple=True, help="Labels to add")
 @click.option("--blocked-by", multiple=True, help="Ticket IDs that block this ticket")
+@click.option("--relates-to", multiple=True, help="Related ticket IDs (non-hierarchical)")
 @click.option("--interactive", "-i", is_flag=True, help="Interactive mode with guided prompts")
 @click.option("--project", "-p", help="Add to project (by name)")
 @click.option("--parent", help="Parent ticket ID (creates as sub-task)")
@@ -188,39 +209,103 @@ def list_tickets(
     help="Set priority level",
 )
 @click.option("--assignee", "-a", help="Assign to user (name or 'me')")
+@click.option(
+    "--allow-empty-description", is_flag=True, hidden=True, help="Skip description requirement"
+)
+@click.option("--no-labels", is_flag=True, help="Explicitly skip label requirement")
+@click.option("--dry-run", is_flag=True, help="Preview ticket without creating")
 def create(
     title: str | None,
     description: str,
     label: tuple,
     blocked_by: tuple,
+    relates_to: tuple,
     interactive: bool,
     project: str | None,
     parent: str | None,
     priority: str | None,
     assignee: str | None,
+    allow_empty_description: bool = False,
+    no_labels: bool = False,
+    dry_run: bool = False,
 ) -> None:
     """Create a new ticket.
+
+    A description is required. Use --description/-d to provide context about
+    the issue, root cause, affected code, and acceptance criteria.
+
+    Labels are required by default. Use --label/-l to specify them, or
+    --no-labels to explicitly skip. In interactive mode (TTY), you'll be
+    prompted to select labels if none are provided.
 
     Use --interactive for guided ticket creation with prompts for
     type, risk, and area labels.
 
     Examples:
 
-        bin/ticket create "New feature" --blocked-by PROJ-123
-        bin/ticket create "Sub-task" --parent PROJ-100
-        bin/ticket create "Urgent fix" --priority urgent --assignee me
-        bin/ticket create "Q1 work" --project "Q1 Roadmap"
+        bin/ticket create "New feature" -d "Add OAuth2 login" -l Feature -l Backend --blocked-by PROJ-123
+        bin/ticket create "Sub-task" -d "Implement refresh tokens" -l Feature -l Backend --parent PROJ-100
+        bin/ticket create "Urgent fix" -d "Login 500 on special chars" -l Bug -l Backend --priority urgent --assignee me
+        bin/ticket create "Q1 work" -d "Sprint planning items" -l Chore -l Backend --project "Q1 Roadmap"
+        bin/ticket create "Related work" -d "Add caching layer" -l Feature -l Backend --relates-to PROJ-50
+        bin/ticket create "Quick note" -d "Description" --no-labels
     """
-    tracker = ensure_tracker_configured()
-
     # Interactive mode
+    labels: list[str] | None = None
     if interactive:
         title, description, labels = _interactive_create()
     else:
         if not title:
             click.echo("Error: Title is required. Use --interactive for guided mode.", err=True)
             sys.exit(1)
+        if not description.strip() and not allow_empty_description:
+            click.echo(
+                "Error: --description is required. Tickets without descriptions are useless.",
+                err=True,
+            )
+            click.echo(
+                'Usage: bin/ticket create "Title" --description "Detailed description"', err=True
+            )
+            sys.exit(1)
         labels = list(label) if label else None
+
+        # Require labels unless --no-labels is set
+        if not labels and not no_labels:
+            config = load_config()
+            label_config = config.get("labels", {})
+
+            if sys.stdin.isatty():
+                # Interactive: prompt for labels
+                labels = _prompt_for_labels(label_config)
+            else:
+                # Non-interactive: fail with helpful error
+                _fail_missing_labels(label_config)
+
+    if dry_run:
+        click.echo("\nDRY RUN — Would create ticket:")
+        click.echo(f"  Title:       {title}")
+        if description:
+            click.echo(
+                f"  Description: {description[:80]}..."
+                if len(description) > 80
+                else f"  Description: {description}"
+            )
+        if labels:
+            click.echo(f"  Labels:      {', '.join(labels)}")
+        if priority:
+            click.echo(f"  Priority:    {priority}")
+        if parent:
+            click.echo(f"  Parent:      {parent}")
+        if project:
+            click.echo(f"  Project:     {project}")
+        if assignee:
+            click.echo(f"  Assignee:    {assignee}")
+        if relates_to:
+            click.echo(f"  Relates to:  {', '.join(relates_to)}")
+        click.echo("\nNo ticket was created. Remove --dry-run to create.")
+        return
+
+    tracker = ensure_tracker_configured()
 
     try:
         # Build kwargs for extended create options
@@ -243,7 +328,8 @@ def create(
         if "assignee" in params and assignee:
             kwargs["assignee"] = assignee
 
-        ticket = tracker.create_ticket(**kwargs)
+        with Spinner("Creating ticket"):
+            ticket = tracker.create_ticket(**kwargs)
         click.echo(f"Created ticket: {ticket.id}")
         if parent and ticket.parent_id:
             click.echo(f"  (sub-task of {ticket.parent_id})")
@@ -261,9 +347,96 @@ def create(
                 except RuntimeError as e:
                     click.echo(f"  ✗ Failed to create relation: {e}", err=True)
 
+        # Set up non-hierarchical relations if specified
+        if relates_to:
+            click.echo()
+            for related_id in relates_to:
+                try:
+                    tracker.add_relation(ticket.id, related_id, "related")
+                    click.echo(f"  \u2713 {ticket.id} relates to {related_id}")
+                except (RuntimeError, NotImplementedError) as e:
+                    click.echo(f"  \u2717 Failed to create relation: {e}", err=True)
+
     except NotImplementedError as e:
         click.echo(str(e), err=True)
         sys.exit(1)
+
+
+def _fail_missing_labels(label_config: dict) -> None:
+    """Print an error with available label categories and exit.
+
+    Called in non-interactive (non-TTY) mode when no labels are provided.
+    """
+    type_labels = label_config.get("type", ["Bug", "Feature", "Chore", "Refactor"])
+    risk_labels = label_config.get("risk", ["Low Risk", "Medium Risk", "High Risk"])
+    area_labels = label_config.get("area", ["Frontend", "Backend", "Infra", "Docs"])
+
+    click.echo("Error: Labels are required when creating tickets.", err=True)
+    click.echo("", err=True)
+    click.echo("Available label categories:", err=True)
+    click.echo(f"  Type (pick one):  {', '.join(type_labels)}", err=True)
+    click.echo(f"  Risk (pick one):  {', '.join(risk_labels)}", err=True)
+    click.echo(f"  Area (pick one+): {', '.join(area_labels)}", err=True)
+    click.echo("", err=True)
+    click.echo("Example:", err=True)
+    click.echo(
+        '  bin/ticket create "Fix login bug" -d "Description" -l Bug -l "High Risk" -l Backend',
+        err=True,
+    )
+    click.echo("", err=True)
+    click.echo("To skip labels, use --no-labels.", err=True)
+    sys.exit(1)
+
+
+def _prompt_for_labels(label_config: dict) -> list[str]:
+    """Interactively prompt for label selection when in TTY mode.
+
+    Args:
+        label_config: The labels section from .vibe/config.json
+
+    Returns:
+        List of selected label strings
+    """
+    labels: list[str] = []
+
+    click.echo()
+    click.echo("No labels provided. Select labels for this ticket:")
+    click.echo()
+
+    # Type label
+    type_labels = label_config.get("type", ["Bug", "Feature", "Chore", "Refactor"])
+    type_menu = NumberedMenu(
+        title="Select ticket type:",
+        options=[(t, "") for t in type_labels],
+        default=2,  # Default to Feature
+    )
+    type_choice = type_menu.show()
+    labels.append(type_labels[type_choice - 1])
+
+    # Risk label
+    risk_labels = label_config.get("risk", ["Low Risk", "Medium Risk", "High Risk"])
+    risk_menu = NumberedMenu(
+        title="Select risk level:",
+        options=[(r, "") for r in risk_labels],
+        default=1,
+    )
+    risk_choice = risk_menu.show()
+    labels.append(risk_labels[risk_choice - 1])
+
+    # Area label
+    area_labels = label_config.get("area", ["Frontend", "Backend", "Infra", "Docs"])
+    area_menu = NumberedMenu(
+        title="Select primary area:",
+        options=[(a, "") for a in area_labels],
+        default=2,  # Default to Backend
+    )
+    area_choice = area_menu.show()
+    labels.append(area_labels[area_choice - 1])
+
+    click.echo()
+    click.echo(f"Selected labels: {', '.join(labels)}")
+
+    return labels
 
 
 def _interactive_create() -> tuple[str, str, list[str]]:
@@ -426,6 +599,23 @@ def create_human_followup(
         return
 
     tracker = ensure_tracker_configured()
+
+    # Deduplication: check if an open ticket with the same title already exists
+    terminal_states = {"Done", "Canceled", "Deployed", "Closed", "Cancelled"}
+    try:
+        existing_tickets = tracker.list_tickets(labels=["HUMAN"], limit=100)
+        for existing in existing_tickets:
+            if existing.title == title and getattr(existing, "status", "") not in terminal_states:
+                click.echo(f"HUMAN follow-up ticket already exists: {existing.id}")
+                click.echo(f"URL: {existing.url}")
+                click.echo("Skipping duplicate creation.")
+                return
+    except (requests.RequestException, RuntimeError):
+        click.echo(
+            "Warning: could not check for existing tickets, proceeding with creation.",
+            err=True,
+        )
+
     try:
         ticket = tracker.create_ticket(
             title=title,
@@ -769,7 +959,7 @@ def list_projects(as_json: bool, state: str | None) -> None:
                 if project.description:
                     click.echo(f"    {project.description[:50]}...")
             click.echo()
-    except Exception as e:
+    except (requests.RequestException, RuntimeError) as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 
@@ -803,7 +993,7 @@ def project_command(action: str, name: str, description: str, state: str) -> Non
             click.echo(f"Created project: {project.name}")
             click.echo(f"ID: {project.id}")
             click.echo(f"URL: {project.url}")
-        except Exception as e:
+        except (requests.RequestException, RuntimeError) as e:
             click.echo(f"Error: {e}", err=True)
             sys.exit(1)
 
@@ -824,7 +1014,7 @@ def project_command(action: str, name: str, description: str, state: str) -> Non
             else:
                 click.echo(f"Project not found: {name}")
                 sys.exit(1)
-        except Exception as e:
+        except (requests.RequestException, RuntimeError) as e:
             click.echo(f"Error: {e}", err=True)
             sys.exit(1)
 
@@ -861,9 +1051,98 @@ def list_users(as_json: bool) -> None:
                 active = "active" if user.get("active", True) else "inactive"
                 click.echo(f"  {name} <{email}> ({active})")
             click.echo()
-    except Exception as e:
+    except (requests.RequestException, RuntimeError) as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
+
+
+@main.group()
+def batch() -> None:
+    """Batch ticket operations."""
+    pass
+
+
+@batch.command("create")
+@click.option(
+    "--from",
+    "from_file",
+    required=True,
+    type=click.Path(exists=True),
+    help="YAML file with ticket definitions",
+)
+@click.option("--dry-run", is_flag=True, help="Preview without creating")
+def batch_create(from_file: str, dry_run: bool) -> None:
+    """Create multiple tickets from a YAML file.
+
+    Example YAML format:
+
+    \b
+        tickets:
+          - title: "Set up auth"
+            description: "Add JWT auth middleware"
+            labels: [Feature, Backend, Medium Risk]
+            priority: high
+          - title: "Add login page"
+            description: "Create login UI"
+            labels: [Feature, Frontend, Medium Risk]
+    """
+    try:
+        import yaml
+    except ImportError:
+        click.echo(
+            "PyYAML is required for batch operations. Install with: pip install pyyaml", err=True
+        )
+        sys.exit(1)
+
+    with open(from_file) as f:
+        data = yaml.safe_load(f)
+
+    tickets_data = data.get("tickets", [])
+    if not tickets_data:
+        click.echo("No tickets found in YAML file.")
+        return
+
+    if dry_run:
+        click.echo(f"DRY RUN — Would create {len(tickets_data)} tickets:\n")
+        for i, t in enumerate(tickets_data, 1):
+            labels_str = ", ".join(t.get("labels", []))
+            click.echo(f'  {i}. "{t["title"]}" ({labels_str})')
+            if t.get("description"):
+                desc = t["description"][:60]
+                click.echo(f"     {desc}...")
+        click.echo("\nNo tickets were created. Remove --dry-run to create.")
+        return
+
+    tracker = ensure_tracker_configured()
+    created = []
+
+    for i, t in enumerate(tickets_data, 1):
+        try:
+            import inspect
+
+            kwargs: dict = {
+                "title": t["title"],
+                "description": t.get("description", ""),
+                "labels": t.get("labels"),
+            }
+            sig = inspect.signature(tracker.create_ticket)
+            params = sig.parameters
+            if "priority" in params and t.get("priority"):
+                kwargs["priority"] = t["priority"]
+            if "parent" in params and t.get("parent"):
+                kwargs["parent"] = t["parent"]
+            if "assignee" in params and t.get("assignee"):
+                kwargs["assignee"] = t["assignee"]
+            if "project" in params and t.get("project"):
+                kwargs["project"] = t["project"]
+
+            ticket = tracker.create_ticket(**kwargs)
+            created.append(ticket)
+            click.echo(f"  Created {ticket.id}: {t['title']}")
+        except Exception as e:
+            click.echo(f'  Failed to create "{t["title"]}": {e}', err=True)
+
+    click.echo(f"\nCreated {len(created)}/{len(tickets_data)} tickets.")
 
 
 def print_ticket(ticket: Ticket, show_children: bool = False) -> None:

@@ -23,7 +23,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Check integration freshness
         id: check
@@ -49,7 +49,7 @@ jobs:
             last_checked=$(jq -r ".integrations[\"$integration\"].last_checked" "$FRESHNESS_FILE")
 
             if [ "$last_checked" = "null" ] || [ -z "$last_checked" ]; then
-              STALE_LIST="${STALE_LIST}• **$integration**: never checked\n"
+              STALE_LIST="${STALE_LIST}â€¢ **$integration**: never checked\n"
               STALE_COUNT=$((STALE_COUNT + 1))
               continue
             fi
@@ -67,7 +67,7 @@ jobs:
 
             if [ $DAYS_AGO -gt $STALE_DAYS ]; then
               version=$(jq -r ".integrations[\"$integration\"].version_checked // \"unknown\"" "$FRESHNESS_FILE")
-              STALE_LIST="${STALE_LIST}• **$integration** ($version): last checked $last_checked ($DAYS_AGO days ago)\n"
+              STALE_LIST="${STALE_LIST}â€¢ **$integration** ($version): last checked $last_checked ($DAYS_AGO days ago)\n"
               STALE_COUNT=$((STALE_COUNT + 1))
             fi
           done
@@ -134,4 +134,3 @@ jobs:
             --body "$BODY" \
             --label "Chore" \
             --label "HUMAN"
-

@@ -57,6 +57,7 @@ class VercelSecretsProvider(SecretProvider):
                             name=name,
                             value="<hidden>",  # Vercel ls doesn't show values
                             environment=env,
+                            provider="vercel",
                         )
                     )
             return secrets
@@ -116,7 +117,7 @@ class VercelSecretsProvider(SecretProvider):
             try:
                 success = self.set_secret(name, value, environment)
                 results[name] = success
-            except Exception:
+            except (subprocess.CalledProcessError, OSError, RuntimeError):
                 results[name] = False
 
         return results

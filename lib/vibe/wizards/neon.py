@@ -30,7 +30,7 @@ def check_neon_auth() -> bool:
         return False
 
 
-def get_neon_projects() -> list[dict]:
+def get_neon_projects() -> list[dict[str, Any]]:
     """Get list of Neon projects."""
     try:
         result = subprocess.run(
@@ -42,9 +42,10 @@ def get_neon_projects() -> list[dict]:
         if result.returncode == 0:
             import json
 
-            return json.loads(result.stdout)
+            projects: list[dict[str, Any]] = json.loads(result.stdout)
+            return projects
         return []
-    except (FileNotFoundError, subprocess.TimeoutExpired, Exception):
+    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return []
 
 
@@ -97,8 +98,8 @@ def run_neon_wizard(config: dict[str, Any]) -> bool:
         click.echo("  Not authenticated with Neon.")
         if click.confirm("  Run 'neonctl auth' now?", default=True):
             click.echo("  Opening browser for authentication...")
-            result = subprocess.run(["neonctl", "auth"])
-            if result.returncode != 0:
+            auth_result = subprocess.run(["neonctl", "auth"])
+            if auth_result.returncode != 0:
                 click.echo("  Authentication failed. Run 'neonctl auth' manually.")
                 return False
             click.echo("  ✓ Authenticated")
@@ -115,16 +116,16 @@ def run_neon_wizard(config: dict[str, Any]) -> bool:
     if not project_id:
         # Try to get current project context
         try:
-            result = subprocess.run(
+            list_result = subprocess.run(
                 ["neonctl", "projects", "list", "--output", "json"],
                 capture_output=True,
                 text=True,
                 timeout=30,
             )
-            if result.returncode == 0:
+            if list_result.returncode == 0:
                 import json
 
-                projects = json.loads(result.stdout)
+                projects = json.loads(list_result.stdout)
                 if projects:
                     click.echo(f"  Found {len(projects)} Neon project(s)")
 
@@ -149,23 +150,23 @@ def run_neon_wizard(config: dict[str, Any]) -> bool:
                 else:
                     click.echo("  No projects found.")
                     click.echo("  Create one at: https://console.neon.tech")
-        except (subprocess.TimeoutExpired, Exception) as e:
+        except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
             click.echo(f"  Could not list projects: {e}")
 
     # Step 4: Get connection string
     click.echo("\nStep 4: Getting connection string...")
 
-    connection_string = None
+    connection_string: str | None = None
     if project_id:
         try:
-            result = subprocess.run(
+            conn_result = subprocess.run(
                 ["neonctl", "connection-string", "--project-id", project_id],
                 capture_output=True,
                 text=True,
                 timeout=30,
             )
-            if result.returncode == 0:
-                connection_string = result.stdout.strip()
+            if conn_result.returncode == 0:
+                connection_string = conn_result.stdout.strip()
                 # Mask password for display
                 masked = connection_string
                 if "@" in masked:
@@ -174,7 +175,7 @@ def run_neon_wizard(config: dict[str, Any]) -> bool:
                     if len(user_pass) > 1:
                         masked = f"{user_pass[0]}:****@{parts[1]}"
                 click.echo(f"  Connection string: {masked}")
-        except (subprocess.TimeoutExpired, Exception) as e:
+        except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
             click.echo(f"  Could not get connection string: {e}")
 
     if not connection_string:

@@ -27,7 +27,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install linting tools
-        run: pip install ruff
+        run: pip install ruff mypy
 
       - name: Run ruff check
         run: ruff check lib/ bin/ --output-format=github
@@ -35,3 +35,5 @@ jobs:
       - name: Run ruff format check
         run: ruff format lib/ bin/ --check --diff
 
+      - name: Run mypy type checking
+        run: mypy lib/vibe/ --ignore-missing-imports --disable-error-code=import-untyped --disable-error-code=no-untyped-def

@@ -120,4 +120,3 @@ jobs:
           echo "No test framework detected."
           echo "Supported frameworks: pytest, vitest, jest, playwright"
           echo "Add tests to enable automatic testing."
-

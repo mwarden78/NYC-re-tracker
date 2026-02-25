@@ -8,6 +8,13 @@ name: HUMAN follow-up on deployment merge
 on:
   push:
     branches: [main]
+    paths:
+      - 'fly.toml'
+      - '**/fly.toml'
+      - 'vercel.json'
+      - '**/vercel.json'
+      - '.env.example'
+      - '**/.env.example'
 
 permissions:
   contents: read
@@ -55,4 +62,3 @@ jobs:
           ARGS=""
           for f in $FILES; do ARGS="$ARGS --files $f"; done
           bin/ticket create-human-followup $ARGS
-
