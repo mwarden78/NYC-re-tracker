@@ -322,6 +322,96 @@ def load_summary() -> dict:
 
 
 @st.cache_data(ttl=_TTL)
+def load_listings(
+    boroughs: list[str] | None = None,
+    price_min: int | None = None,
+    price_max: int | None = None,
+    prop_types: list[str] | None = None,
+    min_value_ratio: float | None = None,
+    min_sqft: int | None = None,
+    limit: int = 500,
+) -> list[dict]:
+    """Return listings from Supabase, sorted by value_ratio DESC (NULLs last)."""
+    client = get_client()
+    query = (
+        client.table("listings")
+        .select("*")
+        .eq("status", "active")
+        .order("value_ratio", desc=True, nullsfirst=False)
+        .limit(limit)
+    )
+    if boroughs:
+        query = query.in_("borough", boroughs)
+    if price_min is not None:
+        query = query.gte("price", price_min)
+    if price_max is not None:
+        query = query.lte("price", price_max)
+    if prop_types:
+        query = query.in_("property_type", prop_types)
+    if min_value_ratio is not None:
+        query = query.gte("value_ratio", min_value_ratio)
+    if min_sqft is not None:
+        query = query.gte("sqft", min_sqft)
+    result = query.execute()
+    return result.data or []
+
+
+def add_listing_to_pipeline(listing: dict) -> str:
+    """Insert a property + watching deal from a listings row. Returns property_id."""
+    client = get_client()
+
+    # Map listing fields to properties table columns
+    prop = {
+        "address": listing["address"],
+        "borough": listing.get("borough") or "Brooklyn",
+        "zip_code": listing.get("zip_code"),
+        "property_type": _normalise_prop_type(listing.get("property_type")),
+        "deal_type": "listing",
+        "price": listing.get("price"),
+        "price_per_sqft": listing.get("price_per_sqft"),
+        "sqft": listing.get("sqft"),
+        "lot_sqft": listing.get("lot_sqft"),
+        "bedrooms": int(listing["beds"]) if listing.get("beds") is not None else None,
+        "bathrooms": listing.get("baths"),
+        "year_built": listing.get("year_built"),
+        "lat": float(listing["latitude"]) if listing.get("latitude") is not None else None,
+        "lng": float(listing["longitude"]) if listing.get("longitude") is not None else None,
+        "bbl": listing.get("bbl"),
+        "source": "rentcast",
+    }
+    result = client.table("properties").insert(prop).execute()
+    property_id: str = result.data[0]["id"]
+
+    client.table("deals").insert({
+        "property_id": property_id,
+        "status": "watching",
+    }).execute()
+
+    st.cache_data.clear()
+    return property_id
+
+
+def _normalise_prop_type(raw: str | None) -> str | None:
+    """Map RentCast property type strings to properties table check constraint values."""
+    if not raw:
+        return None
+    mapping = {
+        "single family": "1-4 family",
+        "single_family": "1-4 family",
+        "multi family": "multifamily",
+        "multi_family": "multifamily",
+        "multifamily": "multifamily",
+        "condo": "condo",
+        "condominium": "condo",
+        "co-op": "co-op",
+        "cooperative": "co-op",
+        "townhouse": "townhouse",
+        "land": "land",
+    }
+    return mapping.get(raw.lower().strip())
+
+
+@st.cache_data(ttl=_TTL)
 def load_ingestion_stats() -> dict:
     """Return data coverage and ingestion statistics for the Ingestion History page.
 
