@@ -493,3 +493,74 @@ def load_ingestion_stats() -> dict:
         "new_30d": new_30d,
         "latest_ingested": latest_ingested,
     }
+
+
+# ---------------------------------------------------------------------------
+# Listings (RentCast for-sale listings with AVM scoring)
+# ---------------------------------------------------------------------------
+
+@st.cache_data(ttl=_TTL)
+def load_listings() -> list[dict]:
+    """Return all active listings from Supabase, ordered by value_ratio DESC nulls last."""
+    client = get_client()
+    PAGE = 1000
+    all_rows: list[dict] = []
+    offset = 0
+    while True:
+        query = (
+            client.table("listings")
+            .select("*")
+            .order("value_ratio", desc=True, nullsfirst=False)
+            .order("created_at", desc=True)
+            .range(offset, offset + PAGE - 1)
+        )
+        result = query.execute()
+        batch = result.data or []
+        all_rows.extend(batch)
+        if len(batch) < PAGE:
+            break
+        offset += PAGE
+    return all_rows
+
+
+def add_listing_to_pipeline(listing: dict) -> str:
+    """Copy a listing into properties table + create a deal in watching status. Returns property_id."""
+    client = get_client()
+
+    # Map property_type to the canonical values used in properties table
+    _type_map = {
+        "Single Family": "1-4 family",
+        "Condo": "condo",
+        "Multi-Family": "multifamily",
+        "Co-op": "co-op",
+        "Townhouse": "townhouse",
+    }
+    mapped_type = _type_map.get(listing.get("property_type", ""))
+
+    prop_data = {
+        "address": listing.get("address"),
+        "borough": listing.get("borough"),
+        "zip_code": listing.get("zip_code"),
+        "price": listing.get("price"),
+        "price_per_sqft": listing.get("price_per_sqft"),
+        "sqft": listing.get("sqft"),
+        "bedrooms": int(listing["beds"]) if listing.get("beds") is not None else None,
+        "bathrooms": listing.get("baths"),
+        "year_built": listing.get("year_built"),
+        "lat": listing.get("latitude"),
+        "lng": listing.get("longitude"),
+        "bbl": listing.get("bbl"),
+        "property_type": mapped_type,
+        "deal_type": "listing",
+        "source": "rentcast",
+    }
+    # Remove None values so Supabase uses column defaults
+    prop_data = {k: v for k, v in prop_data.items() if v is not None}
+
+    prop_result = client.table("properties").insert(prop_data).execute()
+    property_id = prop_result.data[0]["id"]
+
+    client.table("deals").insert({"property_id": property_id, "status": "watching"}).execute()
+
+    st.cache_data.clear()
+    return property_id
