@@ -19,3 +19,12 @@ regexes = [
     '''test-fake-key.*''',
     '''lin_api_test.*''',
 ]
+
+# Suppress specific historical findings by fingerprint
+# .claude/settings.local.json is path-allowlisted but the commit diff is still scanned;
+# adding the fingerprint here ensures gitleaks skips these findings.
+[[allowlist.findings]]
+description = "Linear API key in auto-approved commands (settings.local.json is allowlisted)"
+fingerprints = [
+    "78a51df5b3dbf9dc273a3b001b270829292b3d31:.claude/settings.local.json:linear-api-key:44",
+]
