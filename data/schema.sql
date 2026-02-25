@@ -46,7 +46,11 @@ CREATE TABLE IF NOT EXISTS properties (
 
     -- ACRIS DEED enrichment (populated by data/enrich_last_sale.py)
     last_sale_price NUMERIC,   -- most recent recorded sale price
-    last_sale_date  DATE       -- most recent recorded sale date
+    last_sale_date  DATE,      -- most recent recorded sale date
+
+    -- ACRIS lien enrichment (populated by data/enrich_lien_amount.py)
+    lien_amount     NUMERIC,   -- most recent lien document amount from ACRIS
+    lien_doc_type   TEXT       -- ACRIS doc_type of the matched lien (e.g. 'LIEN', 'LTAX')
 );
 
 -- Deals table: tracks a user's pipeline status for a property
@@ -85,6 +89,8 @@ CREATE TRIGGER deals_updated_at
 --   ALTER TABLE properties ADD COLUMN IF NOT EXISTS tax_class_code TEXT;
 --   ALTER TABLE properties ADD COLUMN IF NOT EXISTS lien_cycle TEXT;
 --   ALTER TABLE properties ADD COLUMN IF NOT EXISTS water_debt_only BOOLEAN;
+--   ALTER TABLE properties ADD COLUMN IF NOT EXISTS lien_amount NUMERIC;
+--   ALTER TABLE properties ADD COLUMN IF NOT EXISTS lien_doc_type TEXT;
 
 -- Indexes for common filters
 CREATE INDEX IF NOT EXISTS idx_properties_borough ON properties(borough);
