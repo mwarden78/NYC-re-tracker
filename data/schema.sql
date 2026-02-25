@@ -186,6 +186,40 @@ CREATE TABLE IF NOT EXISTS api_quota (
     UNIQUE (api_name, year_month)
 );
 
+-- HPD Building Registrations table: owner and managing agent contacts (TES-53)
+-- Source: NYC HPD Multiple Dwelling Registrations (tesw-yqqr + feu5-w2e2)
+-- Populated by data/ingest_hpd_registration.py
+--
+-- Migration (if table does not yet exist):
+--   CREATE TABLE IF NOT EXISTS hpd_registrations (
+--     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+--     property_id UUID NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+--     registration_id TEXT NOT NULL,
+--     lifecycle_stage TEXT,
+--     owner_name TEXT,
+--     owner_type TEXT,
+--     contact_name TEXT,
+--     contact_type TEXT,
+--     registration_end_date DATE,
+--     created_at TIMESTAMPTZ DEFAULT NOW(),
+--     UNIQUE (property_id, registration_id)
+--   );
+--   CREATE INDEX IF NOT EXISTS idx_hpd_registrations_property_id ON hpd_registrations(property_id);
+CREATE TABLE IF NOT EXISTS hpd_registrations (
+    id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    property_id           UUID NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+    registration_id       TEXT NOT NULL,          -- HPD registrationid (stored as text)
+    lifecycle_stage       TEXT,                   -- 'Active' or 'Terminated' (derived from registrationenddate)
+    owner_name            TEXT,                   -- corporationname or firstname + lastname
+    owner_type            TEXT,                   -- 'Individual', 'Corporation', 'Joint'
+    contact_name          TEXT,                   -- managing agent / site manager name
+    contact_type          TEXT,                   -- e.g. 'Agent', 'SiteManager', 'HeadOfficer'
+    registration_end_date DATE,                   -- registrationenddate from tesw-yqqr
+    created_at            TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (property_id, registration_id)         -- idempotent upserts
+);
+CREATE INDEX IF NOT EXISTS idx_hpd_registrations_property_id ON hpd_registrations(property_id);
+
 -- Saved searches table: user-saved filter configurations for deal alerts
 CREATE TABLE IF NOT EXISTS saved_searches (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

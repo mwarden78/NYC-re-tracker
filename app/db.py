@@ -173,6 +173,23 @@ def load_lien_history_by_property(property_id: str) -> list[dict]:
 
 
 @st.cache_data(ttl=_TTL)
+def load_hpd_registration(property_id: str) -> list[dict]:
+    """Return HPD registration rows for a property, most recent first (Active before Terminated)."""
+    client = get_client()
+    result = (
+        client.table("hpd_registrations")
+        .select("*")
+        .eq("property_id", property_id)
+        .order("registration_end_date", desc=True)
+        .execute()
+    )
+    rows = result.data or []
+    # Sort: Active records first, then Terminated
+    rows.sort(key=lambda r: (r.get("lifecycle_stage") != "Active", r.get("registration_end_date") or ""))
+    return rows
+
+
+@st.cache_data(ttl=_TTL)
 def load_violation_counts(open_only: bool = False) -> dict[str, int]:
     """Return {property_id: violation_count} for all properties with violations.
 

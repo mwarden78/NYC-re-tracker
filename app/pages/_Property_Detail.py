@@ -11,6 +11,7 @@ import streamlit as st
 from db import (
     add_to_pipeline,
     load_deal_by_property,
+    load_hpd_registration,
     load_lien_history_by_property,
     load_property_by_id,
     load_sale_history,
@@ -405,6 +406,65 @@ with st.expander(expander_label, expanded=total_count > 0):
                             st.caption(f"Issued: {v['issued_date']}")
                         if v.get("description"):
                             st.caption(v["description"])
+
+# ---------------------------------------------------------------------------
+# HPD Building Registration (TES-61)
+# ---------------------------------------------------------------------------
+try:
+    hpd_registrations = load_hpd_registration(property_id)
+except Exception as _e:
+    hpd_registrations = []
+    st.warning(f"Could not load HPD registration: {_e}")
+
+_hpd_label = f"🏢 HPD Registration ({len(hpd_registrations)})" if hpd_registrations else "🏢 HPD Registration"
+with st.expander(_hpd_label, expanded=bool(hpd_registrations)):
+    if not hpd_registrations:
+        st.info(
+            "No HPD registration found. Only multiple dwellings (3+ units) are required "
+            "to register with HPD. Run `python data/ingest_hpd_registration.py` to populate."
+        )
+    else:
+        # Show the most recent / active registration at the top
+        reg = hpd_registrations[0]
+        stage = reg.get("lifecycle_stage") or "Unknown"
+        stage_badge = "🟢 Active" if stage == "Active" else "🔴 Terminated"
+
+        r1, r2, r3 = st.columns(3)
+        r1.markdown(f"**Registration ID**  \n`{reg.get('registration_id') or '—'}`")
+        r2.markdown(f"**Status**  \n{stage_badge}")
+        r3.markdown(f"**Expires**  \n{reg.get('registration_end_date') or '—'}")
+
+        st.divider()
+
+        o1, o2 = st.columns(2)
+        o1.markdown(f"**Owner**  \n{reg.get('owner_name') or '—'}")
+        o2.markdown(f"**Owner Type**  \n{reg.get('owner_type') or '—'}")
+
+        if reg.get("contact_name") or reg.get("contact_type"):
+            c1, c2 = st.columns(2)
+            c1.markdown(f"**Managing Agent / Contact**  \n{reg.get('contact_name') or '—'}")
+            c2.markdown(f"**Contact Role**  \n{reg.get('contact_type') or '—'}")
+
+        # If corporate owner, call it out — useful signal for absentee ownership
+        if reg.get("owner_type") == "Corporation" and stage == "Active":
+            st.caption("ℹ️ Corporate-owned building — useful for identifying absentee or LLC-held properties.")
+
+        # Show additional registrations (if any) in a compact table
+        if len(hpd_registrations) > 1:
+            st.divider()
+            st.caption(f"**All registrations ({len(hpd_registrations)})**")
+            rows_display = []
+            for r in hpd_registrations:
+                rows_display.append({
+                    "ID":      r.get("registration_id") or "—",
+                    "Status":  r.get("lifecycle_stage") or "—",
+                    "Owner":   r.get("owner_name") or "—",
+                    "Type":    r.get("owner_type") or "—",
+                    "Agent":   r.get("contact_name") or "—",
+                    "Expires": r.get("registration_end_date") or "—",
+                })
+            import pandas as _pd
+            st.dataframe(_pd.DataFrame(rows_display), use_container_width=True, hide_index=True)
 
 # ---------------------------------------------------------------------------
 # Sale History (ACRIS — TES-45)
