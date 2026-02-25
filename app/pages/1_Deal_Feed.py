@@ -319,6 +319,10 @@ def _render_card(prop: dict, viol_count: int = 0, last_sale: dict | None = None)
         if days is not None:
             st.caption(f"Listed {days}d ago")
 
+        walk = prop.get("walk_score")
+        if walk is not None:
+            st.caption(f"🚶 Walk Score: **{walk}**")
+
         if viol_count > 0:
             st.caption(f"⚠️ {viol_count} violation{'s' if viol_count != 1 else ''}")
 

@@ -50,7 +50,12 @@ CREATE TABLE IF NOT EXISTS properties (
 
     -- ACRIS lien enrichment (populated by data/enrich_lien_amount.py)
     lien_amount     NUMERIC,   -- most recent lien document amount from ACRIS
-    lien_doc_type   TEXT       -- ACRIS doc_type of the matched lien (e.g. 'LIEN', 'LTAX')
+    lien_doc_type   TEXT,      -- ACRIS doc_type of the matched lien (e.g. 'LIEN', 'LTAX')
+
+    -- Walk Score enrichment (populated by data/enrich_walk_score.py)
+    walk_score      INTEGER,   -- Walk Score 0–100 (walkscore.com API)
+    transit_score   INTEGER,   -- Transit Score 0–100
+    bike_score      INTEGER    -- Bike Score 0–100
 );
 
 -- Deals table: tracks a user's pipeline status for a property
@@ -91,6 +96,9 @@ CREATE TRIGGER deals_updated_at
 --   ALTER TABLE properties ADD COLUMN IF NOT EXISTS water_debt_only BOOLEAN;
 --   ALTER TABLE properties ADD COLUMN IF NOT EXISTS lien_amount NUMERIC;
 --   ALTER TABLE properties ADD COLUMN IF NOT EXISTS lien_doc_type TEXT;
+--   ALTER TABLE properties ADD COLUMN IF NOT EXISTS walk_score INTEGER;
+--   ALTER TABLE properties ADD COLUMN IF NOT EXISTS transit_score INTEGER;
+--   ALTER TABLE properties ADD COLUMN IF NOT EXISTS bike_score INTEGER;
 
 -- Indexes for common filters
 CREATE INDEX IF NOT EXISTS idx_properties_borough ON properties(borough);
