@@ -111,6 +111,26 @@ def load_sale_history(property_id: str) -> list[dict]:
 
 
 @st.cache_data(ttl=_TTL)
+def load_last_sales() -> dict[str, dict]:
+    """Return {property_id: {"sale_price": X, "sale_date": "YYYY-MM-DD"}} — most recent sale per property."""
+    client = get_client()
+    result = (
+        client.table("sale_history")
+        .select("property_id,sale_price,sale_date")
+        .not_.is_("sale_date", "null")
+        .order("sale_date", desc=True)
+        .execute()
+    )
+    # Walk the DESC-ordered rows and keep only the first (most recent) per property
+    best: dict[str, dict] = {}
+    for row in (result.data or []):
+        pid = row["property_id"]
+        if pid not in best:
+            best[pid] = {"sale_price": row.get("sale_price"), "sale_date": row.get("sale_date")}
+    return best
+
+
+@st.cache_data(ttl=_TTL)
 def load_violations_by_property(property_id: str) -> list[dict]:
     """Return all violations for a single property, ordered by issued_date desc."""
     client = get_client()

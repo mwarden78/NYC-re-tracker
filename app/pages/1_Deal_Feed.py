@@ -1,4 +1,4 @@
-"""Deal Feed — filterable list of property cards (TES-9/TES-10/TES-29/TES-31)."""
+"""Deal Feed — filterable list of property cards (TES-9/TES-10/TES-29/TES-31/TES-46)."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from db import (
     add_to_pipeline,
     count_new_matches,
     load_deals,
+    load_last_sales,
     load_properties,
     load_saved_searches,
     load_violation_counts,
@@ -40,6 +41,11 @@ try:
     saved_searches = load_saved_searches()
 except Exception:
     saved_searches = []
+
+try:
+    last_sales = load_last_sales()
+except Exception:
+    last_sales = {}
 
 tracked: dict[str, str] = {d["property_id"]: d["status"] for d in deals}
 
@@ -268,7 +274,7 @@ if borough_sel:
                 st.caption("*Select more properties to see deal type breakdown.*")
 
 
-def _render_card(prop: dict, viol_count: int = 0) -> None:
+def _render_card(prop: dict, viol_count: int = 0, last_sale: dict | None = None) -> None:
     prop_id = prop["id"]
     deal_type = prop.get("deal_type", "")
     icon = DEAL_ICONS.get(deal_type, "⚪")
@@ -315,6 +321,17 @@ def _render_card(prop: dict, viol_count: int = 0) -> None:
 
         if viol_count > 0:
             st.caption(f"⚠️ {viol_count} violation{'s' if viol_count != 1 else ''}")
+
+        if last_sale:
+            _sp = last_sale.get("sale_price")
+            _sd = last_sale.get("sale_date")
+            _parts = []
+            if _sp:
+                _parts.append(f"${_sp:,.0f}")
+            if _sd:
+                _parts.append(_sd[:4])  # year only
+            if _parts:
+                st.caption(f"Last sold {' · '.join(_parts)}")
 
         st.divider()
 
@@ -412,4 +429,4 @@ else:
     cols = st.columns(3)
     for i, prop in enumerate(filtered):
         with cols[i % 3]:
-            _render_card(prop, viol_count=violation_counts.get(prop["id"], 0))
+            _render_card(prop, viol_count=violation_counts.get(prop["id"], 0), last_sale=last_sales.get(prop["id"]))
