@@ -1,4 +1,4 @@
-"""Map View — properties plotted on an interactive NYC map (TES-11, TES-22, TES-23, TES-24, TES-27)."""
+"""Map View — properties plotted on an interactive NYC map (TES-11, TES-22, TES-23, TES-24, TES-27, TES-46)."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import pandas as pd
 import pydeck as pdk
 import requests
 import streamlit as st
-from db import add_to_pipeline, load_deals, load_properties, load_violation_counts
+from db import add_to_pipeline, load_deals, load_last_sales, load_properties, load_violation_counts
 
 st.set_page_config(page_title="Map | NYC RE Tracker", page_icon="🗺", layout="wide")
 
@@ -26,6 +26,11 @@ try:
 except Exception as e:
     st.error(f"Could not load data from Supabase. Check your `.env` file. ({e})")
     st.stop()
+
+try:
+    last_sales = load_last_sales()
+except Exception:
+    last_sales = {}
 
 tracked: dict[str, str] = {d["property_id"]: d["status"] for d in deals}
 
@@ -329,6 +334,26 @@ radius_center: tuple[float, float] | None = st.session_state.radius_center
 # ---------------------------------------------------------------------------
 # Filter and build base rows
 # ---------------------------------------------------------------------------
+
+def _fmt_last_sale(sale: dict | None) -> str:
+    """Format a last-sale dict as 'e.g. $1.2M · 2022' for map tooltips."""
+    if not sale:
+        return "—"
+    price = sale.get("sale_price")
+    date_str = sale.get("sale_date")
+    parts = []
+    if price:
+        if price >= 1_000_000:
+            parts.append(f"${price / 1_000_000:.1f}M")
+        elif price >= 1_000:
+            parts.append(f"${price / 1_000:.0f}K")
+        else:
+            parts.append(f"${price:,.0f}")
+    if date_str:
+        parts.append(date_str[:4])
+    return " · ".join(parts) if parts else "—"
+
+
 deal_type_values = {DEAL_TYPE_OPTIONS[k] for k in deal_type_sel}
 
 rows = []
@@ -367,6 +392,7 @@ for p in properties:
         "price": p.get("price"),
         "pipeline": tracked.get(p["id"], ""),
         "color": DEAL_COLORS.get(deal_type, [100, 100, 100, 180]),
+        "last_sale_fmt": _fmt_last_sale(last_sales.get(p["id"])),
     })
 
 if not rows:
@@ -541,7 +567,7 @@ else:
         auto_highlight=True,
     )
     tooltip = {
-        "html": "<b>{address}</b><br/>{deal_label} · {borough}<br/>Price: {price_fmt}<br/>Pipeline: {pipeline_fmt}",
+        "html": "<b>{address}</b><br/>{deal_label} · {borough}<br/>Price: {price_fmt}<br/>Last sale: {last_sale_fmt}<br/>Pipeline: {pipeline_fmt}",
         "style": {"backgroundColor": "#1e293b", "color": "white",
                   "fontSize": "13px", "padding": "8px", "borderRadius": "4px"},
     }
