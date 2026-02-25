@@ -55,7 +55,13 @@ CREATE TABLE IF NOT EXISTS properties (
     -- Walk Score enrichment (populated by data/enrich_walk_score.py)
     walk_score      INTEGER,   -- Walk Score 0–100 (walkscore.com API)
     transit_score   INTEGER,   -- Transit Score 0–100
-    bike_score      INTEGER    -- Bike Score 0–100
+    bike_score      INTEGER,   -- Bike Score 0–100
+
+    -- DOF Property Tax Bill enrichment (populated by data/ingest_tax_bills.py)
+    -- Source: DOF Property Charges Balance dataset (scjx-j6np), queried by BBL (parid field)
+    tax_arrears     NUMERIC,   -- sum of outstanding balances (sum_bal) across all charge records
+    annual_tax      NUMERIC,   -- sum of CHG charges (sum_liab) for the most recent tax year
+    tax_bill_date   DATE       -- most recent charge update date (up_date)
 );
 
 -- Deals table: tracks a user's pipeline status for a property
@@ -99,6 +105,9 @@ CREATE TRIGGER deals_updated_at
 --   ALTER TABLE properties ADD COLUMN IF NOT EXISTS walk_score INTEGER;
 --   ALTER TABLE properties ADD COLUMN IF NOT EXISTS transit_score INTEGER;
 --   ALTER TABLE properties ADD COLUMN IF NOT EXISTS bike_score INTEGER;
+--   ALTER TABLE properties ADD COLUMN IF NOT EXISTS tax_arrears NUMERIC;
+--   ALTER TABLE properties ADD COLUMN IF NOT EXISTS annual_tax NUMERIC;
+--   ALTER TABLE properties ADD COLUMN IF NOT EXISTS tax_bill_date DATE;
 
 -- Indexes for common filters
 CREATE INDEX IF NOT EXISTS idx_properties_borough ON properties(borough);

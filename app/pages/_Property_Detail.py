@@ -259,12 +259,16 @@ zoning_district = prop.get("zoning_district")
 last_sale_price = prop.get("last_sale_price")
 last_sale_date = prop.get("last_sale_date")
 bbl = prop.get("bbl")
+tax_arrears = prop.get("tax_arrears")
+annual_tax = prop.get("annual_tax")
+tax_bill_date = prop.get("tax_bill_date")
 
 _has_pluto = any(v is not None for v in [assessed_value, market_value, num_units, num_floors, land_use, zoning_district])
 _has_sale = any(v is not None for v in [last_sale_price, last_sale_date])
+_has_tax = any(v is not None for v in [tax_arrears, annual_tax])
 
-with st.expander("🏛 Parcel & Market Data", expanded=_has_pluto or _has_sale):
-    if not _has_pluto and not _has_sale:
+with st.expander("🏛 Parcel & Market Data", expanded=_has_pluto or _has_sale or _has_tax):
+    if not _has_pluto and not _has_sale and not _has_tax:
         st.info(
             "No parcel data yet. Run `python data/backfill_bbl.py` then "
             "`python data/enrich_pluto.py` and `python data/enrich_last_sale.py` to populate."
@@ -286,6 +290,17 @@ with st.expander("🏛 Parcel & Market Data", expanded=_has_pluto or _has_sale):
         d3.markdown(f"**Land Use**  \n{land_use}" if land_use else "**Land Use**  \n—")
         d4.markdown(f"**Units (Res)**  \n{num_units:,}" if num_units is not None else "**Units (Res)**  \n—")
         d5.markdown(f"**Floors**  \n{num_floors}" if num_floors is not None else "**Floors**  \n—")
+
+        # Row 3: DOF tax bill data (TES-60)
+        if _has_tax:
+            st.divider()
+            st.caption("**DOF Property Tax**")
+            t1, t2, t3 = st.columns(3)
+            t1.metric("Annual Tax", f"${annual_tax:,.0f}" if annual_tax else "—")
+            t2.metric("Outstanding Arrears", f"${tax_arrears:,.0f}" if tax_arrears else "$0")
+            t3.metric("Bill Date", tax_bill_date[:10] if tax_bill_date else "—")
+            if tax_arrears and tax_arrears > 0:
+                st.warning(f"⚠️ This property has **${tax_arrears:,.0f}** in outstanding tax arrears.")
 
 st.divider()
 
