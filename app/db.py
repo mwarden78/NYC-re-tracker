@@ -8,12 +8,13 @@ from __future__ import annotations
 
 import sys
 import os
-from datetime import datetime, timezone as _tz
+from collections import Counter
+from datetime import datetime, timedelta, timezone as _tz
 
 import streamlit as st
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from utils.supabase_client import get_client  # noqa: E402
+from utils.supabase_client import get_client, fetch_all_rows  # noqa: E402
 
 _TTL = 300  # seconds — refresh data every 5 minutes
 
@@ -300,4 +301,88 @@ def load_summary() -> dict:
         "by_borough": by_borough,
         "pipeline": pipeline,
         "total_deals": len(deals),
+    }
+
+
+@st.cache_data(ttl=_TTL)
+def load_ingestion_stats() -> dict:
+    """Return data coverage and ingestion statistics for the Ingestion History page.
+
+    Uses efficient COUNT queries (no full row fetches) for coverage stats.
+    """
+    client = get_client()
+
+    def _count(table: str, filters: dict | None = None) -> int:
+        q = client.table(table).select("id", count="exact")
+        for col, val in (filters or {}).items():
+            if val is None:
+                q = q.not_.is_(col, "null")
+            else:
+                q = q.eq(col, val)
+        return q.execute().count or 0
+
+    total = _count("properties")
+
+    # --- Enrichment coverage ---
+    with_bbl = _count("properties", {"bbl": None}) if total else 0
+    pluto_enriched = _count("properties", {"assessed_value": None}) if total else 0
+    sale_enriched = _count("properties", {"last_sale_price": None}) if total else 0
+    walk_score = _count("properties", {"walk_score": None}) if total else 0
+    tax_bills = _count("properties", {"annual_tax": None}) if total else 0
+    lien_amount = _count("properties", {"lien_amount": None}) if total else 0
+
+    # --- Related table totals ---
+    violations_total = _count("violations")
+    sale_history_total = _count("sale_history")
+    lien_history_total = _count("lien_history")
+
+    # --- Source breakdown (paginated — avoids 1k-row Supabase cap) ---
+    source_rows = fetch_all_rows(client.table("properties").select("source"))
+    by_source = dict(Counter(r.get("source") or "unknown" for r in source_rows))
+
+    # --- Recent ingestion: properties added in the last 7 / 30 days ---
+    now_utc = datetime.now(_tz.utc)
+    cutoff_7d = (now_utc - timedelta(days=7)).isoformat()
+    cutoff_30d = (now_utc - timedelta(days=30)).isoformat()
+    new_7d = (
+        client.table("properties")
+        .select("id", count="exact")
+        .gte("created_at", cutoff_7d)
+        .execute()
+        .count or 0
+    )
+    new_30d = (
+        client.table("properties")
+        .select("id", count="exact")
+        .gte("created_at", cutoff_30d)
+        .execute()
+        .count or 0
+    )
+
+    # --- Most recent ingestion timestamp ---
+    latest_row = (
+        client.table("properties")
+        .select("created_at")
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+        .data
+    )
+    latest_ingested = latest_row[0]["created_at"] if latest_row else None
+
+    return {
+        "total_properties": total,
+        "with_bbl": with_bbl,
+        "pluto_enriched": pluto_enriched,
+        "sale_enriched": sale_enriched,
+        "walk_score": walk_score,
+        "tax_bills": tax_bills,
+        "lien_amount": lien_amount,
+        "violations_total": violations_total,
+        "sale_history_total": sale_history_total,
+        "lien_history_total": lien_history_total,
+        "by_source": by_source,
+        "new_7d": new_7d,
+        "new_30d": new_30d,
+        "latest_ingested": latest_ingested,
     }
