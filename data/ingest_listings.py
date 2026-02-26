@@ -156,9 +156,14 @@ def _safe_float(val) -> Optional[float]:
         return None
 
 
+_PG_INT_MAX = 2_147_483_647  # PostgreSQL INTEGER upper bound
+
 def _safe_int(val) -> Optional[int]:
     f = _safe_float(val)
-    return int(round(f)) if f is not None else None
+    if f is None:
+        return None
+    i = int(round(f))
+    return i if abs(i) <= _PG_INT_MAX else None  # drop values that overflow PG INTEGER
 
 
 def borough_from_zip(zip_code: Optional[str]) -> Optional[str]:
