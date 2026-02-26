@@ -52,7 +52,7 @@ log = logging.getLogger(__name__)
 
 SODA_BASE = "https://data.cityofnewyork.us/resource"
 PAGE_SIZE = 1000
-REQUEST_TIMEOUT = 30  # seconds
+REQUEST_TIMEOUT = 60  # seconds
 
 # ACRIS dataset IDs
 ACRIS_MASTER_ID = "bnx9-e6tj"   # Real Property Master (doc_type, dates, amounts)
@@ -190,12 +190,25 @@ def _soda_headers() -> dict[str, str]:
     return headers
 
 
-def soda_get(dataset_id: str, params: dict) -> list[dict]:
-    """Fetch one page of results from a Socrata dataset."""
+def soda_get(dataset_id: str, params: dict, _retries: int = 3) -> list[dict]:
+    """Fetch one page of results from a Socrata dataset, retrying on transient errors."""
     url = f"{SODA_BASE}/{dataset_id}.json"
-    resp = requests.get(url, params=params, headers=_soda_headers(), timeout=REQUEST_TIMEOUT)
-    resp.raise_for_status()
-    return resp.json()
+    for attempt in range(1, _retries + 1):
+        try:
+            resp = requests.get(url, params=params, headers=_soda_headers(), timeout=REQUEST_TIMEOUT)
+            resp.raise_for_status()
+            return resp.json()
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
+            if attempt == _retries:
+                raise
+            wait = 2 ** attempt  # 2s, 4s
+            import logging as _log
+            _log.getLogger(__name__).warning(
+                "Socrata request timed out (attempt %d/%d), retrying in %ds: %s",
+                attempt, _retries, wait, exc,
+            )
+            time.sleep(wait)
+    return []  # unreachable
 
 
 def soda_get_all(dataset_id: str, where: str, select: str = "*", limit: Optional[int] = None) -> list[dict]:
