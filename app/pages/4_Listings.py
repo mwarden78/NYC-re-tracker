@@ -90,15 +90,18 @@ st.markdown(
 # ---------------------------------------------------------------------------
 # Listing cards
 # ---------------------------------------------------------------------------
+_VALUE_RATIO_CAP = 5.0  # ratios above this are almost certainly data artefacts
+
 def _value_ratio_badge(vr: float | None) -> str:
     """Return a coloured emoji badge based on value ratio."""
     if vr is None:
         return "⚪ Not scored"
+    display = f"{min(vr, _VALUE_RATIO_CAP):.2f}×" + ("+" if vr > _VALUE_RATIO_CAP else "")
     if vr >= 1.15:
-        return f"🟢 {vr:.2f}×"
+        return f"🟢 {display}"
     if vr >= 1.05:
-        return f"🟡 {vr:.2f}×"
-    return f"⚪ {vr:.2f}×"
+        return f"🟡 {display}"
+    return f"⚪ {display}"
 
 
 def _fmt_price(val: int | None) -> str:
