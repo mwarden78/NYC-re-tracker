@@ -1,9 +1,11 @@
-"""Property Detail page — TES-19, TES-45.
+"""Property Detail page — TES-19, TES-45, TES-89.
 
 Navigated to via query param: ?property_id=<UUID>
 """
 
 from __future__ import annotations
+
+from urllib.parse import urlencode
 
 import pandas as pd
 import pydeck as pdk
@@ -79,9 +81,20 @@ except Exception as e:
     deal = None
 
 # ---------------------------------------------------------------------------
-# Back button
+# Back button + share link
 # ---------------------------------------------------------------------------
-st.page_link("pages/1_Deal_Feed.py", label="← Back to Deal Feed")
+_nav_left, _nav_right = st.columns([3, 1])
+with _nav_left:
+    st.page_link("pages/1_Deal_Feed.py", label="← Back to Deal Feed")
+with _nav_right:
+    _share_url = f"?{urlencode({'property_id': property_id})}"
+    _copy_js = f"""
+    <button onclick="navigator.clipboard.writeText(window.location.origin + window.location.pathname + '{_share_url}').then(() => this.textContent = 'Copied!')" style="
+        background: none; border: 1px solid #555; color: #ccc; padding: 4px 12px;
+        border-radius: 6px; cursor: pointer; font-size: 13px; width: 100%;
+    ">Copy Link</button>
+    """
+    st.markdown(_copy_js, unsafe_allow_html=True)
 
 st.divider()
 
