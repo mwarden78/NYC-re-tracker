@@ -28,12 +28,17 @@ import logging
 import sys
 from pathlib import Path
 
-import matplotlib
-matplotlib.use("Agg")  # headless — no display needed
-import matplotlib.pyplot as plt
+try:
+    import matplotlib
+    matplotlib.use("Agg")  # headless — no display needed
+    import matplotlib.pyplot as plt
+    import shap
+    _SHAP_AVAILABLE = True
+except ImportError:
+    _SHAP_AVAILABLE = False
+
 import numpy as np
 import pandas as pd
-import shap
 import xgboost as xgb
 from sklearn.metrics import r2_score, root_mean_squared_error
 
@@ -213,7 +218,7 @@ def train(
     best = getattr(model, "best_iteration", None)
     if best is not None:
         log.info("Best iteration: %d (early stopping at %d rounds)",
-                 best, XGB_PARAMS["early_stopping_rounds"])
+                 best, EARLY_STOPPING_ROUNDS)
 
     return model
 
@@ -264,6 +269,10 @@ def evaluate(model: xgb.XGBRegressor, test: pd.DataFrame) -> None:
 
 def save_shap(model: xgb.XGBRegressor, test: pd.DataFrame) -> None:
     """Generate and save SHAP feature importance summary plot."""
+    if not _SHAP_AVAILABLE:
+        log.warning("shap/matplotlib not available — skipping SHAP plot.")
+        return
+
     if len(test) < MIN_SHAP_ROWS:
         log.warning("Only %d test rows — skipping SHAP plot (need ≥%d).",
                     len(test), MIN_SHAP_ROWS)

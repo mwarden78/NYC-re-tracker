@@ -125,10 +125,10 @@ def fetch_listings(force: bool, limit: int | None) -> list[dict[str, Any]]:
     client = get_client()
 
     query = client.table("listings").select(
-        "id,address,borough,zip_code,latitude,longitude,bbl,"
+        "id,rentcast_id,address,borough,zip_code,latitude,longitude,bbl,"
         "price,sqft,lot_sqft,beds,baths,property_type,year_built,"
         "bldgclass,zonedist1,residfar,builtfar,far_remaining,"
-        "num_floors,units_res,units_total,predicted_value"
+        "num_floors,units_res,units_total,predicted_value,status"
     )
 
     if not force:
@@ -273,6 +273,8 @@ def write_scores(
         updates.append(
             {
                 "id": row["id"],
+                "rentcast_id": row["rentcast_id"],
+                "address": row["address"],
                 "predicted_value": predicted_value,
                 "value_ratio": value_ratio,
                 "avm_model_ver": AVM_MODEL_VER,
@@ -282,7 +284,11 @@ def write_scores(
     if not updates:
         return 0
 
-    client.table("listings").upsert(updates).execute()
+    # Use rentcast_id as conflict key (UNIQUE NOT NULL); include address to
+    # satisfy NOT NULL constraint in the hypothetical INSERT path.
+    client.table("listings").upsert(
+        updates, on_conflict="rentcast_id"
+    ).execute()
     return len(updates)
 
 
