@@ -10,6 +10,7 @@ import pydeck as pdk
 import streamlit as st
 from db import (
     add_to_pipeline,
+    load_complaints_311,
     load_deal_by_property,
     load_hpd_registration,
     load_lien_history_by_property,
@@ -406,6 +407,58 @@ with st.expander(expander_label, expanded=total_count > 0):
                             st.caption(f"Issued: {v['issued_date']}")
                         if v.get("description"):
                             st.caption(v["description"])
+
+# ---------------------------------------------------------------------------
+# 311 Complaints (TES-63)
+# ---------------------------------------------------------------------------
+try:
+    complaints_311 = load_complaints_311(property_id)
+except Exception as _e:
+    complaints_311 = []
+    st.warning(f"Could not load 311 complaints: {_e}")
+
+_c311_count = len(complaints_311)
+_c311_open  = sum(1 for c in complaints_311 if (c.get("status") or "").lower() == "open")
+_c311_label = f"📞 311 Complaints ({_c311_count})" if _c311_count else "📞 311 Complaints"
+
+with st.expander(_c311_label, expanded=_c311_count > 0):
+    if not complaints_311:
+        st.info(
+            "No 311 complaints on record. "
+            "Run `python data/ingest_311_complaints.py` to populate."
+        )
+    else:
+        # Summary metrics
+        s1, s2, s3 = st.columns(3)
+        s1.metric("Total Complaints", _c311_count)
+        s2.metric("Open", _c311_open)
+        s3.metric("Closed", _c311_count - _c311_open)
+
+        if _c311_open > 0:
+            st.warning(f"⚠️ {_c311_open} open 311 complaint(s) on this property.")
+
+        st.divider()
+
+        # Full complaints table
+        _c311_rows = []
+        for c in complaints_311:
+            status = (c.get("status") or "").strip()
+            status_icon = "🔴" if status.lower() == "open" else "🟢"
+            _c311_rows.append({
+                "Date":           c.get("created_date") or "—",
+                "Type":           c.get("complaint_type") or "—",
+                "Descriptor":     c.get("descriptor") or "—",
+                "Status":         f"{status_icon} {status}" if status else "—",
+                "Agency":         c.get("agency") or "—",
+            })
+
+        st.dataframe(
+            pd.DataFrame(_c311_rows),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+st.divider()
 
 # ---------------------------------------------------------------------------
 # HPD Building Registration (TES-61)
