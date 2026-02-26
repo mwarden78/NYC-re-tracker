@@ -1,4 +1,4 @@
-"""Deal Feed — filterable list of property cards (TES-9/TES-10/TES-29/TES-31/TES-46/TES-124)."""
+"""Deal Feed — filterable list of property cards (TES-9/TES-10/TES-29/TES-31/TES-46/TES-81/TES-124)."""
 
 from __future__ import annotations
 
@@ -27,6 +27,30 @@ render_more_section()
 
 st.title("Deal Feed")
 st.caption("Browse foreclosure and tax lien properties")
+
+# ---------------------------------------------------------------------------
+# "New since last visit" tracking (TES-81)
+# ---------------------------------------------------------------------------
+_now = datetime.now(timezone.utc)
+# Capture the previous visit timestamp *before* updating it
+_last_visit: datetime | None = st.session_state.get("deal_feed_last_visit")
+# Update for next visit
+st.session_state["deal_feed_last_visit"] = _now
+
+
+def _is_new_property(prop: dict) -> bool:
+    """Return True if a property was created after the user's last visit."""
+    if _last_visit is None:
+        return False
+    created = prop.get("created_at")
+    if not created:
+        return False
+    try:
+        dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+        return dt > _last_visit
+    except Exception:
+        return False
+
 
 # ---------------------------------------------------------------------------
 # Load all data up front so filter ranges reflect the full dataset
@@ -313,9 +337,12 @@ def _render_card(prop: dict, viol_count: int = 0, last_sale: dict | None = None)
     lien_cycle = prop.get("lien_cycle")
     is_in_rem = lien_cycle == "In Rem"
 
+    is_new = _is_new_property(prop)
+
     with st.container(border=True):
         left, right = st.columns([2, 1])
-        left.markdown(f"**{icon} {label}**")
+        _new_tag = " <span style='background:#16a34a;color:white;padding:1px 6px;border-radius:3px;font-size:11px;font-weight:600'>NEW</span>" if is_new else ""
+        left.markdown(f"**{icon} {label}**{_new_tag}", unsafe_allow_html=True)
         right.markdown(
             f"<p style='text-align:right;margin:0'>{borough}</p>",
             unsafe_allow_html=True,
@@ -397,12 +424,17 @@ def _render_compact_card(prop: dict, viol_count: int = 0) -> None:
     pipeline_status = tracked.get(prop_id)
 
     is_in_rem = prop.get("lien_cycle") == "In Rem"
+    is_new = _is_new_property(prop)
 
     with st.container(border=True):
         c1, c2, c3 = st.columns([3, 1, 1])
         with c1:
-            rem_tag = " <span style='background:#dc2626;color:white;padding:1px 6px;border-radius:3px;font-size:11px'>IN REM</span>" if is_in_rem else ""
-            st.markdown(f"**{icon} {address}**{rem_tag}", unsafe_allow_html=True)
+            _tags = ""
+            if is_new:
+                _tags += " <span style='background:#16a34a;color:white;padding:1px 6px;border-radius:3px;font-size:11px;font-weight:600'>NEW</span>"
+            if is_in_rem:
+                _tags += " <span style='background:#dc2626;color:white;padding:1px 6px;border-radius:3px;font-size:11px'>IN REM</span>"
+            st.markdown(f"**{icon} {address}**{_tags}", unsafe_allow_html=True)
             st.caption(borough)
         with c2:
             st.markdown(f"**${price:,.0f}**" if price else "*N/A*")
@@ -483,9 +515,12 @@ elif shown == 0:
     st.warning("No properties match your current filters.")
     st.caption(f"0 of {total} properties shown")
 else:
+    new_count = sum(1 for p in filtered if _is_new_property(p))
     label = f"{shown} propert{'y' if shown == 1 else 'ies'}"
     if shown < total:
         label += f" (filtered from {total})"
+    if new_count > 0:
+        label += f" · {new_count} new"
 
     header_col, export_col = st.columns([3, 1])
     header_col.caption(label)
