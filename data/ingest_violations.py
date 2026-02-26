@@ -48,6 +48,11 @@ DOB_DATASET_ID = "3h2n-5cm9"
 # Address helpers
 # ---------------------------------------------------------------------------
 
+def _soql_escape(s: str) -> str:
+    """Escape single quotes for Socrata SoQL string literals ('' is the SQL escape)."""
+    return s.replace("'", "''")
+
+
 def _split_address(address: str) -> tuple[str, str]:
     """Split '123 Atlantic Ave' into ('123', 'ATLANTIC AVE')."""
     parts = address.strip().split(" ", 1)
@@ -76,7 +81,7 @@ def fetch_hpd_violations(property_id: str, address: str, borough: str) -> list[d
 
     rows = soda_get_all(
         HPD_DATASET_ID,
-        where=f"upper(housenumber)='{house}' AND upper(streetname)='{street}'",
+        where=f"upper(housenumber)='{_soql_escape(house)}' AND upper(streetname)='{_soql_escape(street)}'",
         select="violationid,class,novdescription,novissueddate,currentstatus,currentstatusdate,violationstatus",
     )
 
@@ -107,7 +112,7 @@ def fetch_dob_violations(property_id: str, address: str) -> list[dict]:
 
     rows = soda_get_all(
         DOB_DATASET_ID,
-        where=f"upper(house_number)='{house}' AND upper(street)='{street}'",
+        where=f"upper(house_number)='{_soql_escape(house)}' AND upper(street)='{_soql_escape(street)}'",
         select="isn_dob_bis_viol,violation_type,description,issue_date,violation_category,disposition_comments",
     )
 

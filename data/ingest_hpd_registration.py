@@ -57,6 +57,11 @@ AGENT_ROLES = ["Agent", "SiteManager", "HeadOfficer", "Officer", "Lessee"]
 # Address helpers
 # ---------------------------------------------------------------------------
 
+def _soql_escape(s: str) -> str:
+    """Escape single quotes for Socrata SoQL string literals ('' is the SQL escape)."""
+    return s.replace("'", "''")
+
+
 def _split_address(address: str) -> tuple[str, str]:
     """Split '123 Atlantic Ave' into ('123', 'ATLANTIC AVE')."""
     parts = address.strip().split(" ", 1)
@@ -86,9 +91,9 @@ def fetch_registrations(house: str, street: str, boro: str) -> list[dict]:
     return soda_get_all(
         REGISTRATIONS_DATASET,
         where=(
-            f"upper(housenumber)='{house}'"
-            f" AND upper(streetname)='{street}'"
-            f" AND upper(boro)='{boro}'"
+            f"upper(housenumber)='{_soql_escape(house)}'"
+            f" AND upper(streetname)='{_soql_escape(street)}'"
+            f" AND upper(boro)='{_soql_escape(boro)}'"
         ),
         select="registrationid,registrationenddate,lastregistrationdate",
     )
