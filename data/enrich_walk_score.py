@@ -117,16 +117,19 @@ def enrich(
     api_key = _get_api_key()
     client = get_client()
 
-    query = (
-        client.table("properties")
-        .select("id,address,borough,lat,lng")
-        .not_.is_("lat", "null")
-        .not_.is_("lng", "null")
-    )
-    if not force:
-        # Skip rows that already have all three scores
-        query = query.is_("walk_score", "null")
-    rows = query.limit(limit).execute().data if limit else fetch_all_rows(query)
+    def _props_query():
+        q = (
+            client.table("properties")
+            .select("id,address,borough,lat,lng")
+            .not_.is_("lat", "null")
+            .not_.is_("lng", "null")
+        )
+        if not force:
+            # Skip rows that already have all three scores
+            q = q.is_("walk_score", "null")
+        return q
+
+    rows = _props_query().limit(limit).execute().data if limit else fetch_all_rows(_props_query)
     log.info("Found %d properties to enrich with Walk Score data", len(rows))
 
     if not rows:

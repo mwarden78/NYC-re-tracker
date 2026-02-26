@@ -34,12 +34,12 @@ def backfill(limit: Optional[int] = None, dry_run: bool = False) -> None:
     client = get_client()
 
     # Fetch properties missing lat/lng OR BBL — one GeoSearch call fills both
-    query = (
-        client.table("properties")
-        .select("id,address,borough,lat,bbl")
-        .or_("lat.is.null,bbl.is.null")
+    rows = (
+        client.table("properties").select("id,address,borough,lat,bbl").or_("lat.is.null,bbl.is.null")
+        .limit(limit).execute().data
+        if limit
+        else fetch_all_rows(lambda: client.table("properties").select("id,address,borough,lat,bbl").or_("lat.is.null,bbl.is.null"))
     )
-    rows = query.limit(limit).execute().data if limit else fetch_all_rows(query)
 
     log.info("Found %d properties missing lat/lng or BBL", len(rows))
 

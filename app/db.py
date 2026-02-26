@@ -444,7 +444,7 @@ def load_ingestion_stats() -> dict:
     lien_history_total = _count("lien_history")
 
     # --- Source breakdown (paginated — avoids 1k-row Supabase cap) ---
-    source_rows = fetch_all_rows(client.table("properties").select("source"))
+    source_rows = fetch_all_rows(lambda: client.table("properties").select("source"))
     by_source = dict(Counter(r.get("source") or "unknown" for r in source_rows))
 
     # --- Recent ingestion: properties added in the last 7 / 30 days ---

@@ -133,13 +133,13 @@ def enrich(limit: Optional[int] = None, dry_run: bool = False, force: bool = Fal
     log.info("Using DOF tax year: %s", tax_year)
 
     # Load properties that have a BBL
-    query = client.table("properties").select("id,address,borough,bbl").not_.is_("bbl", "null")
-    if not force:
-        query = query.is_("market_value", "null")
-    if limit:
-        rows = query.limit(limit).execute().data
-    else:
-        rows = fetch_all_rows(query)
+    def _props_query():
+        q = client.table("properties").select("id,address,borough,bbl").not_.is_("bbl", "null")
+        if not force:
+            q = q.is_("market_value", "null")
+        return q
+
+    rows = _props_query().limit(limit).execute().data if limit else fetch_all_rows(_props_query)
     log.info("Found %d properties to enrich", len(rows))
 
     if not rows:

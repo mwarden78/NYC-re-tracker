@@ -219,13 +219,13 @@ def ingest(limit: Optional[int] = None, dry_run: bool = False, force: bool = Fal
 
     # Load all properties that have a BBL (paginate past Supabase's 1000-row limit)
     rows = fetch_all_rows(
-        client.table("properties").select("id,address,borough,bbl").not_.is_("bbl", "null")
+        lambda: client.table("properties").select("id,address,borough,bbl").not_.is_("bbl", "null")
     )
     log.info("Total properties with BBL: %d", len(rows))
 
     # Unless --force, skip those that already have sale_history records
     if not force:
-        existing_resp = fetch_all_rows(client.table("sale_history").select("property_id"))
+        existing_resp = fetch_all_rows(lambda: client.table("sale_history").select("property_id"))
         existing_ids = {r["property_id"] for r in existing_resp}
         rows = [r for r in rows if r["id"] not in existing_ids]
         log.info("Properties without sale history (to process): %d", len(rows))

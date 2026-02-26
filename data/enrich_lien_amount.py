@@ -168,16 +168,15 @@ def enrich(
     client = get_client()
 
     # Load properties with a BBL
-    query = (
-        client.table("properties")
-        .select("id,address,borough,bbl,deal_type")
-        .not_.is_("bbl", "null")
-    )
-    if not all_deals:
-        query = query.eq("deal_type", "tax_lien")
-    if not force:
-        query = query.is_("lien_amount", "null")
-    rows = query.limit(limit).execute().data if limit else fetch_all_rows(query)
+    def _props_query():
+        q = client.table("properties").select("id,address,borough,bbl,deal_type").not_.is_("bbl", "null")
+        if not all_deals:
+            q = q.eq("deal_type", "tax_lien")
+        if not force:
+            q = q.is_("lien_amount", "null")
+        return q
+
+    rows = _props_query().limit(limit).execute().data if limit else fetch_all_rows(_props_query)
     log.info("Found %d properties to enrich with lien amount data", len(rows))
 
     if not rows:

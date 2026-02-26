@@ -168,10 +168,9 @@ def upsert_violations(violations: list[dict], dry_run: bool = False) -> int:
 
 def load_properties(property_id: Optional[str] = None) -> list[dict]:
     client = get_client()
-    query = client.table("properties").select("id,address,borough")
     if property_id:
-        return query.eq("id", property_id).execute().data or []
-    return fetch_all_rows(query)
+        return client.table("properties").select("id,address,borough").eq("id", property_id).execute().data or []
+    return fetch_all_rows(lambda: client.table("properties").select("id,address,borough"))
 
 
 def run(source: str, property_id: Optional[str], dry_run: bool) -> None:

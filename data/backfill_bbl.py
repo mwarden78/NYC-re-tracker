@@ -37,15 +37,10 @@ log = logging.getLogger(__name__)
 def backfill(limit: Optional[int] = None, dry_run: bool = False) -> None:
     client = get_client()
 
-    query = (
-        client.table("properties")
-        .select("id,address,borough")
-        .is_("bbl", "null")
-    )
     if limit:
-        rows = query.limit(limit).execute().data
+        rows = client.table("properties").select("id,address,borough").is_("bbl", "null").limit(limit).execute().data
     else:
-        rows = fetch_all_rows(query)
+        rows = fetch_all_rows(lambda: client.table("properties").select("id,address,borough").is_("bbl", "null"))
 
     log.info("Found %d properties with null bbl", len(rows))
 

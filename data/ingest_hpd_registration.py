@@ -253,12 +253,11 @@ def upsert_registrations(records: list[dict], dry_run: bool = False) -> int:
 
 def load_properties(property_id: Optional[str] = None, limit: Optional[int] = None) -> list[dict]:
     client = get_client()
-    query = client.table("properties").select("id,address,borough")
     if property_id:
-        query = query.eq("id", property_id)
+        return client.table("properties").select("id,address,borough").eq("id", property_id).execute().data or []
     if limit:
-        return query.limit(limit).execute().data or []
-    return fetch_all_rows(query)
+        return client.table("properties").select("id,address,borough").limit(limit).execute().data or []
+    return fetch_all_rows(lambda: client.table("properties").select("id,address,borough"))
 
 
 def run(property_id: Optional[str], limit: Optional[int], dry_run: bool) -> None:
