@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Score listings with AVM -- TES-75.
+"""Score listings with AVM -- TES-75, TES-102, TES-103.
 
 Reads rows from the Supabase `listings` table, builds the same feature
 vector used during training (TES-71 / train_avm.py), runs the XGBoost
@@ -206,9 +206,15 @@ def build_features(
             far_remaining if far_remaining is not None else MEDIAN_FILLS["far_remaining"]
         )
 
-        r["is_mixed_use"] = 0.0  # listings lack commercial units field
+        # TES-103: derive is_mixed_use from bldgclass (PLUTO-enriched on listings)
+        # S* = mixed residential/commercial (S1-S5, S9); fallback 0 if unknown
+        bldgclass_raw = str(row.get("bldgclass") or "").strip().upper()
+        r["is_mixed_use"] = 1.0 if bldgclass_raw.startswith("S") else 0.0
 
-        r["sale_year"] = float(CURRENT_YEAR)
+        # TES-102: clamp sale_year to training range (max 2024) to avoid
+        # XGBoost extrapolating price trends beyond the training window
+        TRAIN_YEAR_MAX = 2024
+        r["sale_year"] = float(min(CURRENT_YEAR, TRAIN_YEAR_MAX))
         r["sale_quarter"] = float(CURRENT_QUARTER)
 
         r["latitude"] = _float(row.get("latitude")) or 40.7128
