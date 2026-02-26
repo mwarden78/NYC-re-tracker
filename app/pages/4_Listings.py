@@ -1,4 +1,4 @@
-"""Listings feed — active NYC for-sale listings ranked by AVM value ratio (TES-76)."""
+"""Listings feed — active NYC for-sale listings ranked by AVM value ratio (TES-76, TES-109)."""
 
 from __future__ import annotations
 
@@ -50,6 +50,14 @@ with st.sidebar:
         help="Minimum gross square footage",
     )
 
+    AVM_SCOPE_OPTIONS = ["All", "In scope only", "Out of scope only"]
+    avm_scope_sel = st.selectbox(
+        "AVM scope",
+        AVM_SCOPE_OPTIONS,
+        help="The AVM model supports 1-4 family, multifamily, townhouse, and land. "
+             "Condos and co-ops are out of scope and won't receive a predicted value.",
+    )
+
 # ---------------------------------------------------------------------------
 # Load data
 # ---------------------------------------------------------------------------
@@ -67,6 +75,14 @@ except Exception as e:
     st.stop()
 
 # ---------------------------------------------------------------------------
+# AVM scope filter (client-side)
+# ---------------------------------------------------------------------------
+if avm_scope_sel == "In scope only":
+    listings = [l for l in listings if not _is_out_of_scope(l.get("property_type"))]
+elif avm_scope_sel == "Out of scope only":
+    listings = [l for l in listings if _is_out_of_scope(l.get("property_type"))]
+
+# ---------------------------------------------------------------------------
 # Empty state
 # ---------------------------------------------------------------------------
 if not listings:
@@ -82,20 +98,40 @@ if not listings:
 # Header row
 # ---------------------------------------------------------------------------
 scored = sum(1 for l in listings if l.get("value_ratio") is not None)
-st.markdown(
-    f"**{len(listings):,} listings** · {scored:,} AVM-scored"
-    + (f" · {len(listings) - scored:,} pending score" if scored < len(listings) else "")
-)
+out_of_scope = sum(1 for l in listings if _is_out_of_scope(l.get("property_type")))
+pending = len(listings) - scored - out_of_scope
+parts = [f"**{len(listings):,} listings**", f"{scored:,} scored"]
+if out_of_scope:
+    parts.append(f"{out_of_scope:,} out of scope")
+if pending > 0:
+    parts.append(f"{pending:,} pending")
+st.markdown(" · ".join(parts))
 
 # ---------------------------------------------------------------------------
 # Listing cards
 # ---------------------------------------------------------------------------
 _VALUE_RATIO_CAP = 5.0  # ratios above this are almost certainly data artefacts
 
-def _value_ratio_badge(vr: float | None) -> str:
-    """Return a coloured emoji badge based on value ratio."""
+# Property types the AVM model can score
+_AVM_IN_SCOPE_TYPES = {"single_family", "multi_family", "townhouse", "land",
+                       "1-4 family", "multifamily"}
+
+
+def _is_out_of_scope(prop_type: str | None) -> bool:
+    """Return True if the property type is outside AVM model scope (condo/co-op)."""
+    if not prop_type:
+        return False
+    return prop_type.lower().replace(" ", "_").replace("-", "") not in {
+        t.replace(" ", "_").replace("-", "") for t in _AVM_IN_SCOPE_TYPES
+    }
+
+
+def _value_ratio_badge(vr: float | None, prop_type: str | None = None) -> str:
+    """Return a coloured emoji badge based on value ratio and scope."""
     if vr is None:
-        return "⚪ Not scored"
+        if _is_out_of_scope(prop_type):
+            return "🔘 Out of scope"
+        return "⏳ Pending"
     display = f"{min(vr, _VALUE_RATIO_CAP):.2f}×" + ("+" if vr > _VALUE_RATIO_CAP else "")
     if vr >= 1.15:
         return f"🟢 {display}"
@@ -154,7 +190,7 @@ for listing in listings:
             st.markdown(f"**{price_str}** asking" + (f"  ·  {details}" if details else ""))
 
             # Row 3: AVM score
-            badge = _value_ratio_badge(value_ratio)
+            badge = _value_ratio_badge(value_ratio, prop_type)
             avm_str = f"AVM: {_fmt_price(predicted)}" if predicted else "AVM: pending"
             zoning_parts: list[str] = []
             if zonedist:
