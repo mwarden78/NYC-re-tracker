@@ -27,7 +27,7 @@ with st.form("add_deal_form", clear_on_submit=True):
         zip_code = st.text_input("Zip Code", placeholder="11201", max_chars=5)
         deal_type = st.selectbox(
             "Deal Type *",
-            options=["off_market", "foreclosure", "tax_lien", "listing"],
+            options=["off_market", "foreclosure", "pre_foreclosure", "tax_lien", "listing"],
             format_func=lambda x: x.replace("_", " ").title(),
         )
 

@@ -41,18 +41,21 @@ tracked: dict[str, str] = {d["property_id"]: d["status"] for d in deals}
 # ---------------------------------------------------------------------------
 DEAL_COLORS: dict[str, list[int]] = {
     "foreclosure": [220, 38, 38, 200],
+    "pre_foreclosure": [234, 179, 8, 200],
     "tax_lien": [234, 88, 12, 200],
     "listing": [37, 99, 235, 200],
     "off_market": [124, 58, 237, 200],
 }
 DEAL_LABELS = {
     "foreclosure": "Foreclosure",
+    "pre_foreclosure": "Pre-Foreclosure",
     "tax_lien": "Tax Lien",
     "listing": "Listing",
     "off_market": "Off Market",
 }
 DEAL_ICONS = {
     "foreclosure": "🔴",
+    "pre_foreclosure": "🟡",
     "tax_lien": "🟠",
     "listing": "🔵",
     "off_market": "🟣",
@@ -238,6 +241,7 @@ with st.sidebar:
 
     DEAL_TYPE_OPTIONS = {
         "Foreclosure": "foreclosure",
+        "Pre-Foreclosure": "pre_foreclosure",
         "Tax Lien": "tax_lien",
         "Listing": "listing",
         "Off Market": "off_market",
@@ -699,7 +703,7 @@ col_legend, col_stats = st.columns([2, 1])
 
 with col_legend:
     st.caption("**Legend**")
-    legend_cols = st.columns(4)
+    legend_cols = st.columns(5)
     for i, (key, label) in enumerate(DEAL_LABELS.items()):
         r, g, b, _ = DEAL_COLORS[key]
         hex_color = f"#{r:02x}{g:02x}{b:02x}"

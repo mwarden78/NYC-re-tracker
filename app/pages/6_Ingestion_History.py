@@ -151,7 +151,7 @@ with st.expander("Ingestion & Enrichment Scripts"):
         """
 | Script | Description | Key Table(s) |
 |--------|-------------|-------------|
-| `data/ingest_nyc_open_data.py` | Ingests foreclosure and tax lien properties from NYC Open Data | `properties` |
+| `data/ingest_nyc_open_data.py` | Ingests foreclosure, pre-foreclosure, and tax lien properties from NYC Open Data | `properties` |
 | `data/backfill_bbl.py` | Geocodes addresses → BBL using the NYC GeoSearch API | `properties.bbl` |
 | `data/backfill_geocoding.py` | Geocodes missing lat/lng values | `properties.lat`, `.lng` |
 | `data/enrich_pluto.py` | Adds MapPLUTO fields (assessed value, zoning, units) | `properties` |
