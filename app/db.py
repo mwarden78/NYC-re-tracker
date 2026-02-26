@@ -523,34 +523,6 @@ def load_ingestion_stats() -> dict:
     }
 
 
-# ---------------------------------------------------------------------------
-# Listings (RentCast for-sale listings with AVM scoring)
-# ---------------------------------------------------------------------------
-
-@st.cache_data(ttl=_TTL)
-def load_listings() -> list[dict]:
-    """Return all active listings from Supabase, ordered by value_ratio DESC nulls last."""
-    client = get_client()
-    PAGE = 1000
-    all_rows: list[dict] = []
-    offset = 0
-    while True:
-        query = (
-            client.table("listings")
-            .select("*")
-            .order("value_ratio", desc=True, nullsfirst=False)
-            .order("created_at", desc=True)
-            .range(offset, offset + PAGE - 1)
-        )
-        result = query.execute()
-        batch = result.data or []
-        all_rows.extend(batch)
-        if len(batch) < PAGE:
-            break
-        offset += PAGE
-    return all_rows
-
-
 def add_listing_to_pipeline(listing: dict) -> str:
     """Copy a listing into properties table + create a deal in watching status. Returns property_id."""
     client = get_client()
