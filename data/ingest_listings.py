@@ -52,6 +52,12 @@ RENTCAST_BASE = "https://api.rentcast.io/v1/listings/sale"
 RENTCAST_PAGE_SIZE = 500
 RENTCAST_MONTHLY_LIMIT = 50
 
+# City names to sweep by default — excludes "New York" (Manhattan) which is
+# already ingested. Queens addresses sometimes use neighbourhood names
+# (Flushing, Jamaica, Astoria…) so city="Queens" won't be exhaustive, but
+# captures the bulk of the inventory.
+DEFAULT_CITY_SWEEPS = ["Brooklyn", "Bronx", "Staten Island", "Queens"]
+
 PLUTO_DATASET_ID = "64uk-42ks"
 PLUTO_SODA_BASE = "https://data.cityofnewyork.us/resource"
 PLUTO_BATCH_SIZE = 100
@@ -111,10 +117,10 @@ def _rentcast_headers() -> dict[str, str]:
     return {"X-Api-Key": api_key, "Accept": "application/json"}
 
 
-def fetch_rentcast_page(offset: int, limit: int = RENTCAST_PAGE_SIZE) -> list[dict]:
+def fetch_rentcast_page(offset: int, limit: int = RENTCAST_PAGE_SIZE, city: str = "New York") -> list[dict]:
     """Fetch one page of active NYC for-sale listings from RentCast."""
     params = {
-        "city": "New York",
+        "city": city,
         "state": "NY",
         "status": "active",
         "limit": limit,
@@ -273,10 +279,11 @@ def ingest(
     dry_run: bool = False,
     borough_filter: Optional[str] = None,
     skip_geocode: bool = False,
+    cities: Optional[list[str]] = None,
 ) -> None:
     client = get_client()
 
-    # Resolve borough filter abbreviation
+    # Resolve optional post-fetch borough filter
     borough_name: Optional[str] = None
     if borough_filter:
         borough_name = BOROUGH_ABBREV.get(borough_filter.upper())
@@ -285,58 +292,71 @@ def ingest(
             sys.exit(1)
         log.info("Borough filter: %s", borough_name)
 
+    city_list = cities if cities is not None else DEFAULT_CITY_SWEEPS
+    log.info("City sweeps: %s", city_list)
     log_usage_summary("rentcast")
 
     # ---------------------------------------------------------------------------
-    # Phase 1: Fetch from RentCast
+    # Phase 1: Fetch from RentCast — one paginated sweep per city
     # ---------------------------------------------------------------------------
     all_listings: list[dict] = []
-    offset = 0
-    page_num = 0
+    quota_exhausted = False
 
-    while True:
-        # Respect --limit: stop before fetching more pages than needed
-        fetch_size = RENTCAST_PAGE_SIZE
-        if limit is not None:
-            remaining_needed = limit - len(all_listings)
-            if remaining_needed <= 0:
+    for city in city_list:
+        if quota_exhausted:
+            break
+        if limit is not None and len(all_listings) >= limit:
+            break
+
+        log.info("=== Sweeping city: %s ===", city)
+        offset = 0
+        page_num = 0
+
+        while True:
+            fetch_size = RENTCAST_PAGE_SIZE
+            if limit is not None:
+                remaining_needed = limit - len(all_listings)
+                if remaining_needed <= 0:
+                    break
+                fetch_size = min(RENTCAST_PAGE_SIZE, remaining_needed)
+
+            page_num += 1
+            log.info("Fetching %s page %d (offset=%d, size=%d)…", city, page_num, offset, fetch_size)
+
+            try:
+                count = check_and_increment("rentcast", monthly_limit=RENTCAST_MONTHLY_LIMIT)
+                log.info("  Quota call #%d of %d this month", count, RENTCAST_MONTHLY_LIMIT)
+            except QuotaExceededError as exc:
+                log.error(str(exc))
+                quota_exhausted = True
                 break
-            fetch_size = min(RENTCAST_PAGE_SIZE, remaining_needed)
 
-        page_num += 1
-        log.info("Fetching RentCast page %d (offset=%d, size=%d)…", page_num, offset, fetch_size)
+            try:
+                page = fetch_rentcast_page(offset, fetch_size, city=city)
+            except requests.HTTPError as exc:
+                log.error("RentCast API error on %s page %d: %s", city, page_num, exc)
+                break
+            except Exception as exc:
+                log.error("Unexpected error on %s page %d: %s", city, page_num, exc)
+                break
 
-        try:
-            count = check_and_increment("rentcast", monthly_limit=RENTCAST_MONTHLY_LIMIT)
-            log.info("  Quota call #%d of %d this month", count, RENTCAST_MONTHLY_LIMIT)
-        except QuotaExceededError as exc:
-            log.error(str(exc))
-            break
+            if not page:
+                log.info("Empty page — end of %s results.", city)
+                break
 
-        try:
-            page = fetch_rentcast_page(offset, fetch_size)
-        except requests.HTTPError as exc:
-            log.error("RentCast API error on page %d: %s", page_num, exc)
-            break
-        except Exception as exc:
-            log.error("Unexpected error on page %d: %s", page_num, exc)
-            break
+            log.info("  Got %d listings on %s page %d", len(page), city, page_num)
+            all_listings.extend(page)
+            offset += len(page)
 
-        if not page:
-            log.info("Empty page — end of results.")
-            break
+            if len(page) < fetch_size:
+                log.info("Last %s page (returned %d < %d) — stopping.", city, len(page), fetch_size)
+                break
 
-        log.info("  Got %d listings on page %d", len(page), page_num)
-        all_listings.extend(page)
-        offset += len(page)
+            time.sleep(0.1)  # courtesy delay between pages
 
-        if len(page) < fetch_size:
-            log.info("Last page (returned %d < %d) — stopping.", len(page), fetch_size)
-            break
+        log.info("City %s done — %d listings total so far", city, len(all_listings))
 
-        time.sleep(0.1)  # courtesy delay between pages
-
-    log.info("Fetched %d total listings from RentCast", len(all_listings))
+    log.info("Fetched %d total listings from RentCast across %d city sweep(s)", len(all_listings), len(city_list))
 
     if not all_listings:
         log.info("Nothing to process.")
@@ -479,6 +499,13 @@ def parse_args() -> argparse.Namespace:
         "--skip-geocode", action="store_true",
         help="Skip BBL geocoding and PLUTO enrichment (faster, no bbl/PLUTO fields)",
     )
+    parser.add_argument(
+        "--cities", nargs="+", metavar="CITY", default=None,
+        help=(
+            "City name(s) to query from RentCast (default: Brooklyn Bronx 'Staten Island' Queens). "
+            "Pass 'New York' to re-sweep Manhattan."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -489,4 +516,5 @@ if __name__ == "__main__":
         dry_run=args.dry_run,
         borough_filter=args.borough,
         skip_geocode=args.skip_geocode,
+        cities=args.cities,
     )
