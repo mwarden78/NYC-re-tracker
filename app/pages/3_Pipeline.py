@@ -1,6 +1,8 @@
-"""Pipeline — track deals through the investment workflow (TES-12)."""
+"""Pipeline — track deals through the investment workflow (TES-12, TES-92)."""
 
 from __future__ import annotations
+
+import statistics
 
 import streamlit as st
 from db import load_deals, load_violation_counts, update_deal_status
@@ -95,15 +97,65 @@ for deal in deals:
     status = deal.get("status", "watching")
     by_stage.setdefault(status, []).append(deal)
 
-# Summary metrics
+# ---------------------------------------------------------------------------
+# Value summary helpers
+# ---------------------------------------------------------------------------
+
+def _stage_prices(stage_deals: list[dict]) -> list[float]:
+    """Extract non-None prices from deals in a stage."""
+    return [
+        p for d in stage_deals
+        if (p := (d.get("properties") or {}).get("price")) is not None
+    ]
+
+
+def _fmt_value(value: float) -> str:
+    if value >= 1_000_000:
+        return f"${value / 1_000_000:.1f}M"
+    if value >= 1_000:
+        return f"${value / 1_000:.0f}K"
+    return f"${value:,.0f}"
+
+
+# ---------------------------------------------------------------------------
+# Summary metrics — count + value per stage
+# ---------------------------------------------------------------------------
 summary_cols = st.columns(4)
 for i, stage in enumerate(STAGES):
-    count = len(by_stage[stage])
+    stage_deals = by_stage[stage]
+    count = len(stage_deals)
+    prices = _stage_prices(stage_deals)
+    total_val = sum(prices)
     with summary_cols[i]:
         st.metric(
             label=f"{STAGE_ICONS[stage]} {STAGE_LABELS[stage]}",
             value=count,
         )
+        if total_val:
+            st.caption(f"Total: {_fmt_value(total_val)}")
+
+# ---------------------------------------------------------------------------
+# Portfolio value summary bar
+# ---------------------------------------------------------------------------
+active_stages = ["watching", "analyzing", "offer_made"]  # exclude dead
+all_active_prices = []
+for s in active_stages:
+    all_active_prices.extend(_stage_prices(by_stage[s]))
+
+if all_active_prices:
+    total_portfolio = sum(all_active_prices)
+    median_price = statistics.median(all_active_prices)
+    priced_count = len(all_active_prices)
+    active_count = sum(len(by_stage[s]) for s in active_stages)
+    unpriced = active_count - priced_count
+
+    st.divider()
+    vcol1, vcol2, vcol3, vcol4 = st.columns(4)
+    vcol1.metric("Active Portfolio Value", _fmt_value(total_portfolio))
+    vcol2.metric("Median Deal Price", _fmt_value(median_price))
+    vcol3.metric("Deals with Price", f"{priced_count}/{active_count}")
+    if len(all_active_prices) >= 2:
+        vcol4.metric("Price Range", f"{_fmt_value(min(all_active_prices))} – {_fmt_value(max(all_active_prices))}")
 
 st.divider()
 
@@ -112,8 +164,10 @@ pipeline_cols = st.columns(4)
 for i, stage in enumerate(STAGES):
     with pipeline_cols[i]:
         stage_deals = by_stage[stage]
+        prices = _stage_prices(stage_deals)
         st.subheader(f"{STAGE_ICONS[stage]} {STAGE_LABELS[stage]}")
-        st.caption(f"{len(stage_deals)} deal{'s' if len(stage_deals) != 1 else ''}")
+        value_note = f" · {_fmt_value(sum(prices))}" if prices else ""
+        st.caption(f"{len(stage_deals)} deal{'s' if len(stage_deals) != 1 else ''}{value_note}")
 
         if not stage_deals:
             st.markdown(
