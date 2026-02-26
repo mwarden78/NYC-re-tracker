@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS deals (
     property_id UUID NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
     status TEXT NOT NULL DEFAULT 'watching' CHECK (status IN ('watching', 'analyzing', 'offer_made', 'dead')),
     notes TEXT,
+    stage_changed_at TIMESTAMPTZ DEFAULT NOW(),  -- when the deal entered its current stage
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -111,6 +112,7 @@ CREATE TRIGGER deals_updated_at
 --   (api_quota table — run the full CREATE TABLE block above, or:)
 --   CREATE TABLE IF NOT EXISTS api_quota (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), api_name TEXT NOT NULL, year_month TEXT NOT NULL, call_count INTEGER NOT NULL DEFAULT 0, monthly_limit INTEGER NOT NULL DEFAULT 50, updated_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE (api_name, year_month));
 --   ALTER TABLE properties ADD COLUMN IF NOT EXISTS active_mortgage_amount NUMERIC;
+--   ALTER TABLE deals ADD COLUMN IF NOT EXISTS stage_changed_at TIMESTAMPTZ DEFAULT NOW();
 --   ALTER TABLE properties ADD COLUMN IF NOT EXISTS active_mortgage_lender TEXT;
 
 -- Indexes for common filters

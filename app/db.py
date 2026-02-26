@@ -9,7 +9,7 @@ from __future__ import annotations
 import sys
 import os
 from collections import Counter
-from datetime import datetime, timedelta, timezone as _tz
+from datetime import datetime, timedelta, timezone, timezone as _tz
 
 import streamlit as st
 
@@ -70,9 +70,12 @@ def add_to_pipeline(property_id: str, status: str = "watching") -> None:
 
 
 def update_deal_status(deal_id: str, new_status: str) -> None:
-    """Update a deal's pipeline status and clear the cache."""
+    """Update a deal's pipeline status, record the stage change timestamp, and clear the cache."""
     client = get_client()
-    client.table("deals").update({"status": new_status}).eq("id", deal_id).execute()
+    client.table("deals").update({
+        "status": new_status,
+        "stage_changed_at": datetime.now(timezone.utc).isoformat(),
+    }).eq("id", deal_id).execute()
     st.cache_data.clear()
 
 

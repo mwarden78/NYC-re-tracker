@@ -1,4 +1,4 @@
-"""Pipeline — track deals through the investment workflow (TES-12, TES-92, TES-93)."""
+"""Pipeline — track deals through the investment workflow (TES-12, TES-92, TES-93, TES-95)."""
 
 from __future__ import annotations
 
@@ -58,6 +58,17 @@ def _deal_age(created_at: str | None) -> str | None:
         return None
 
 
+def _stage_since(stage_changed_at: str | None) -> str | None:
+    """Return 'since Mon DD' from a stage_changed_at timestamp."""
+    if not stage_changed_at:
+        return None
+    try:
+        dt = datetime.fromisoformat(stage_changed_at.replace("Z", "+00:00"))
+        return f"since {dt.strftime('%b %d').replace(' 0', ' ')}"
+    except Exception:
+        return None
+
+
 def _render_deal_card(deal: dict) -> None:
     prop = deal.get("properties") or {}
 
@@ -67,6 +78,11 @@ def _render_deal_card(deal: dict) -> None:
     age = _deal_age(deal.get("created_at"))
     age_suffix = f" · {age}" if age else ""
     st.caption(f"{borough} · {deal_type}{age_suffix}")
+
+    stage_since = _stage_since(deal.get("stage_changed_at"))
+    if stage_since:
+        current_label = STAGE_LABELS.get(deal.get("status", "watching"), "Watching")
+        st.caption(f"In {current_label} {stage_since}")
 
     col1, col2 = st.columns(2)
     with col1:
