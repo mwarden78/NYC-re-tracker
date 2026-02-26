@@ -643,6 +643,11 @@ if selected_prop:
                 "pages/_Property_Detail.py",
                 label="View Full Details →",
             )
+            _sv_lat = selected_prop.get("lat")
+            _sv_lng = selected_prop.get("lng")
+            if _sv_lat and _sv_lng:
+                sv_url = f"https://www.google.com/maps/@?api=1&map_action=pano&viewpoint={_sv_lat},{_sv_lng}"
+                st.link_button("Street View", sv_url, use_container_width=True)
             if pipeline_status:
                 st.success(PIPELINE_LABELS.get(pipeline_status, pipeline_status))
             else:

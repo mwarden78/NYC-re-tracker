@@ -163,6 +163,8 @@ with map_col:
                 map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
             )
         )
+        sv_url = f"https://www.google.com/maps/@?api=1&map_action=pano&viewpoint={lat},{lng}"
+        st.link_button("Street View", sv_url, use_container_width=True)
     else:
         st.info("No coordinates available for this property.")
 
