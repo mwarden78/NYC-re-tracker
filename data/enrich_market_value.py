@@ -171,8 +171,8 @@ def enrich(limit: Optional[int] = None, dry_run: bool = False, force: bool = Fal
 
     log.info("DOF returned data for %d/%d BBLs", len(dof_by_bbl), len(unique_bbls))
 
-    # Apply updates
-    updated = 0
+    # Build a flat list of (prop_id, market_val) updates
+    updates: list[dict] = []
     not_found = 0
     for bbl, prop_ids in bbl_to_ids.items():
         dof_row = dof_by_bbl.get(bbl)
@@ -185,18 +185,55 @@ def enrich(limit: Optional[int] = None, dry_run: bool = False, force: bool = Fal
             not_found += 1
             continue
 
-        fields = {"market_value": market_val}
-
         for prop_id in prop_ids:
-            log.info("  BBL %s → market_value=$%s", bbl, f"{market_val:,.0f}")
-            if not dry_run:
-                client.table("properties").update(fields).eq("id", prop_id).execute()
-            updated += 1
+            updates.append({"id": prop_id, "market_value": market_val})
+
+    log.info("Updates to write: %d (%d BBLs not in DOF)", len(updates), not_found)
 
     if dry_run:
-        log.info("[DRY RUN] Would have updated %d properties (%d BBLs not in DOF).", updated, not_found)
-    else:
-        log.info("Done. Updated %d properties (%d BBLs not found in DOF).", updated, not_found)
+        for u in updates[:10]:
+            log.info("  [DRY RUN] %s → $%s", u["id"][:8], f"{u['market_value']:,.0f}")
+        if len(updates) > 10:
+            log.info("  [DRY RUN] … and %d more", len(updates) - 10)
+        log.info("[DRY RUN] Would have updated %d properties.", len(updates))
+        return
+
+    # Write updates individually with periodic connection refresh and retry
+    updated = 0
+    errors = 0
+    for i, u in enumerate(updates):
+        # Refresh the Supabase client every 2000 writes to avoid connection drops
+        if i > 0 and i % 2000 == 0:
+            from utils.supabase_client import get_client as _gc
+            _gc.cache_clear()
+            client = _gc()
+            log.info("  Refreshed Supabase connection at %d/%d", i, len(updates))
+
+        for attempt in range(3):
+            try:
+                client.table("properties").update(
+                    {"market_value": u["market_value"]}
+                ).eq("id", u["id"]).execute()
+                updated += 1
+                break
+            except Exception as exc:
+                if attempt < 2:
+                    wait = 2 ** attempt
+                    log.warning("Write failed for %s (attempt %d): %s — retrying in %ds",
+                                u["id"][:8], attempt + 1, exc, wait)
+                    from utils.supabase_client import get_client as _gc
+                    _gc.cache_clear()
+                    client = _gc()
+                    time.sleep(wait)
+                else:
+                    log.error("Write failed for %s after 3 attempts: %s", u["id"][:8], exc)
+                    errors += 1
+
+        if (i + 1) % 1000 == 0:
+            log.info("  Progress: %d/%d updated (%d errors)", updated, len(updates), errors)
+
+    log.info("Done. Updated %d properties (%d errors, %d BBLs not found in DOF).",
+             updated, errors, not_found)
 
 
 # ---------------------------------------------------------------------------
