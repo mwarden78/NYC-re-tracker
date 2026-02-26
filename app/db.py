@@ -125,6 +125,20 @@ def load_sale_history(property_id: str) -> list[dict]:
 
 
 @st.cache_data(ttl=_TTL)
+def load_mortgages(property_id: str) -> list[dict]:
+    """Return mortgage rows for a property, ordered by mortgage_date DESC."""
+    client = get_client()
+    result = (
+        client.table("mortgages")
+        .select("*")
+        .eq("property_id", property_id)
+        .order("mortgage_date", desc=True)
+        .execute()
+    )
+    return result.data or []
+
+
+@st.cache_data(ttl=_TTL)
 def load_last_sales() -> dict[str, dict]:
     """Return {property_id: {"sale_price": X, "sale_date": "YYYY-MM-DD"}} — most recent sale per property."""
     client = get_client()

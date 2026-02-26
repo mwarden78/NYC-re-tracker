@@ -13,6 +13,7 @@ from db import (
     load_deal_by_property,
     load_hpd_registration,
     load_lien_history_by_property,
+    load_mortgages,
     load_property_by_id,
     load_sale_history,
     load_violations_by_property,
@@ -465,6 +466,68 @@ with st.expander(_hpd_label, expanded=bool(hpd_registrations)):
                 })
             import pandas as _pd
             st.dataframe(_pd.DataFrame(rows_display), use_container_width=True, hide_index=True)
+
+# ---------------------------------------------------------------------------
+# Mortgage History (ACRIS — TES-62)
+# ---------------------------------------------------------------------------
+try:
+    mortgages = load_mortgages(property_id)
+except Exception as _e:
+    mortgages = []
+    st.warning(f"Could not load mortgage history: {_e}")
+
+active_mortgage_amount = prop.get("active_mortgage_amount")
+active_mortgage_lender = prop.get("active_mortgage_lender")
+_has_active_mtge = active_mortgage_amount is not None or active_mortgage_lender is not None
+_mtge_count = len(mortgages)
+_mtge_label = f"🏦 Mortgage History ({_mtge_count})" if _mtge_count else "🏦 Mortgage History"
+
+with st.expander(_mtge_label, expanded=_has_active_mtge or _mtge_count > 0):
+    if not mortgages and not _has_active_mtge:
+        st.info(
+            "No mortgage records found. "
+            "Run `python data/enrich_mortgages.py` to populate ACRIS mortgage history."
+        )
+    else:
+        # Active mortgage summary (back-filled from most recent MTGE record)
+        if _has_active_mtge:
+            ma1, ma2 = st.columns(2)
+            ma1.metric("Active Mortgage Amount", f"${active_mortgage_amount:,.0f}" if active_mortgage_amount else "—")
+            ma2.metric("Active Lender", active_mortgage_lender or "—")
+
+        if mortgages:
+            if _has_active_mtge:
+                st.divider()
+                st.caption("**Full Mortgage History (ACRIS)**")
+
+            # Doc type labels
+            _doc_labels = {
+                "MTGE": "Mortgage",
+                "AGMT": "Agreement",
+                "ASST": "Assignment",
+                "CORR": "Corrected Mortgage",
+                "MMOD": "Modification",
+                "SMOD": "Spreader/Mod",
+                "SMXT": "Spreader/Mod/Ext",
+            }
+
+            _rows = []
+            for _m in mortgages:
+                _md = _m.get("mortgage_date")
+                _ma = _m.get("mortgage_amount")
+                _dt = (_m.get("doc_type") or "").strip()
+                _mat = _m.get("maturity_date")
+                _rows.append({
+                    "Date": _md[:10] if _md else "—",
+                    "Type": _doc_labels.get(_dt, _dt) if _dt else "—",
+                    "Amount": f"${_ma:,.0f}" if _ma else "—",
+                    "Lender": _m.get("lender_name") or "—",
+                    "Maturity": _mat[:10] if _mat else "—",
+                })
+            import pandas as _pd
+            st.dataframe(_pd.DataFrame(_rows), use_container_width=True, hide_index=True)
+
+st.divider()
 
 # ---------------------------------------------------------------------------
 # Sale History (ACRIS — TES-45)
