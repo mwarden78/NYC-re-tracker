@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS properties (
     borough TEXT NOT NULL CHECK (borough IN ('Manhattan', 'Brooklyn', 'Queens', 'Bronx', 'Staten Island')),
     zip_code TEXT,
     property_type TEXT CHECK (property_type IN ('condo', 'co-op', 'townhouse', 'multifamily', '1-4 family', 'land')),
-    deal_type TEXT NOT NULL CHECK (deal_type IN ('foreclosure', 'tax_lien', 'listing', 'off_market')),
+    deal_type TEXT NOT NULL CHECK (deal_type IN ('foreclosure', 'pre_foreclosure', 'tax_lien', 'listing', 'off_market')),
     price NUMERIC,
     price_per_sqft NUMERIC,
     sqft INTEGER,
@@ -114,6 +114,9 @@ CREATE TRIGGER deals_updated_at
 --   ALTER TABLE properties ADD COLUMN IF NOT EXISTS active_mortgage_amount NUMERIC;
 --   ALTER TABLE deals ADD COLUMN IF NOT EXISTS stage_changed_at TIMESTAMPTZ DEFAULT NOW();
 --   ALTER TABLE properties ADD COLUMN IF NOT EXISTS active_mortgage_lender TEXT;
+--   (TES-123) Add 'pre_foreclosure' to deal_type CHECK constraint:
+--   ALTER TABLE properties DROP CONSTRAINT IF EXISTS properties_deal_type_check;
+--   ALTER TABLE properties ADD CONSTRAINT properties_deal_type_check CHECK (deal_type IN ('foreclosure', 'pre_foreclosure', 'tax_lien', 'listing', 'off_market'));
 
 -- Indexes for common filters
 CREATE INDEX IF NOT EXISTS idx_properties_borough ON properties(borough);

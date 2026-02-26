@@ -31,12 +31,14 @@ st.set_page_config(page_title="Property Detail | NYC RE Tracker", page_icon="�
 # ---------------------------------------------------------------------------
 DEAL_ICONS = {
     "foreclosure": "🔴",
+    "pre_foreclosure": "🟡",
     "tax_lien": "🟠",
     "listing": "🔵",
     "off_market": "🟣",
 }
 DEAL_LABELS = {
     "foreclosure": "Foreclosure",
+    "pre_foreclosure": "Pre-Foreclosure",
     "tax_lien": "Tax Lien",
     "listing": "Listing",
     "off_market": "Off Market",
