@@ -54,3 +54,6 @@ data/training/
 
 # Logs
 *.log
+
+# RentCast fetch cache (temporary file between fetch and upsert)
+data/.rentcast_cache.json

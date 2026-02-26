@@ -24,10 +24,12 @@ Quota: each paginated RentCast request costs 1 call against the 50/month cap.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import sys
 import time
+from datetime import date
 from typing import Optional
 
 import requests
@@ -57,6 +59,52 @@ RENTCAST_MONTHLY_LIMIT = 50
 # (Flushing, Jamaica, Astoria…) so city="Queens" won't be exhaustive, but
 # captures the bulk of the inventory.
 DEFAULT_CITY_SWEEPS = ["Brooklyn", "Bronx", "Staten Island", "Queens"]
+
+# ---------------------------------------------------------------------------
+# Fetch cache — saves raw API results to disk so a failed upsert can be
+# retried without burning additional RentCast quota calls.
+# ---------------------------------------------------------------------------
+_CACHE_PATH = os.path.join(os.path.dirname(__file__), ".rentcast_cache.json")
+
+
+def _load_cache(cities: list[str]) -> list[dict] | None:
+    """Return cached listings if the cache is from today and covers the same cities."""
+    try:
+        with open(_CACHE_PATH) as f:
+            data = json.load(f)
+        if data.get("date") != str(date.today()):
+            return None
+        if sorted(data.get("cities", [])) != sorted(cities):
+            return None
+        listings = data.get("listings", [])
+        log.info("Loaded %d listings from cache (%s) — skipping RentCast fetch.", len(listings), _CACHE_PATH)
+        return listings
+    except FileNotFoundError:
+        return None
+    except Exception as exc:
+        log.warning("Could not read fetch cache (%s): %s — fetching fresh.", _CACHE_PATH, exc)
+        return None
+
+
+def _save_cache(cities: list[str], listings: list[dict]) -> None:
+    """Persist raw listings to disk so retries can skip the API fetch."""
+    try:
+        with open(_CACHE_PATH, "w") as f:
+            json.dump({"date": str(date.today()), "cities": cities, "listings": listings}, f)
+        log.info("Saved %d listings to fetch cache (%s).", len(listings), _CACHE_PATH)
+    except Exception as exc:
+        log.warning("Could not write fetch cache: %s", exc)
+
+
+def _clear_cache() -> None:
+    """Delete the cache file after a successful upsert."""
+    try:
+        os.remove(_CACHE_PATH)
+        log.info("Fetch cache cleared.")
+    except FileNotFoundError:
+        pass
+    except Exception as exc:
+        log.warning("Could not clear fetch cache: %s", exc)
 
 PLUTO_DATASET_ID = "64uk-42ks"
 PLUTO_SODA_BASE = "https://data.cityofnewyork.us/resource"
@@ -285,6 +333,7 @@ def ingest(
     borough_filter: Optional[str] = None,
     skip_geocode: bool = False,
     cities: Optional[list[str]] = None,
+    no_cache: bool = False,
 ) -> None:
     client = get_client()
 
@@ -302,66 +351,75 @@ def ingest(
     log_usage_summary("rentcast")
 
     # ---------------------------------------------------------------------------
-    # Phase 1: Fetch from RentCast — one paginated sweep per city
+    # Phase 1: Fetch from RentCast — one paginated sweep per city.
+    # Loads from disk cache if available so a failed upsert can be retried
+    # without burning additional quota calls.
     # ---------------------------------------------------------------------------
-    all_listings: list[dict] = []
-    quota_exhausted = False
+    use_cache = not no_cache and limit is None
+    cached = _load_cache(city_list) if use_cache else None
+    all_listings: list[dict] = cached if cached is not None else []
 
-    for city in city_list:
-        if quota_exhausted:
-            break
-        if limit is not None and len(all_listings) >= limit:
-            break
+    if cached is None:
+        quota_exhausted = False
+        for city in city_list:
+            if quota_exhausted:
+                break
+            if limit is not None and len(all_listings) >= limit:
+                break
 
-        log.info("=== Sweeping city: %s ===", city)
-        offset = 0
-        page_num = 0
+            log.info("=== Sweeping city: %s ===", city)
+            offset = 0
+            page_num = 0
 
-        while True:
-            fetch_size = RENTCAST_PAGE_SIZE
-            if limit is not None:
-                remaining_needed = limit - len(all_listings)
-                if remaining_needed <= 0:
+            while True:
+                fetch_size = RENTCAST_PAGE_SIZE
+                if limit is not None:
+                    remaining_needed = limit - len(all_listings)
+                    if remaining_needed <= 0:
+                        break
+                    fetch_size = min(RENTCAST_PAGE_SIZE, remaining_needed)
+
+                page_num += 1
+                log.info("Fetching %s page %d (offset=%d, size=%d)…", city, page_num, offset, fetch_size)
+
+                try:
+                    count = check_and_increment("rentcast", monthly_limit=RENTCAST_MONTHLY_LIMIT)
+                    log.info("  Quota call #%d of %d this month", count, RENTCAST_MONTHLY_LIMIT)
+                except QuotaExceededError as exc:
+                    log.error(str(exc))
+                    quota_exhausted = True
                     break
-                fetch_size = min(RENTCAST_PAGE_SIZE, remaining_needed)
 
-            page_num += 1
-            log.info("Fetching %s page %d (offset=%d, size=%d)…", city, page_num, offset, fetch_size)
+                try:
+                    page = fetch_rentcast_page(offset, fetch_size, city=city)
+                except requests.HTTPError as exc:
+                    log.error("RentCast API error on %s page %d: %s", city, page_num, exc)
+                    break
+                except Exception as exc:
+                    log.error("Unexpected error on %s page %d: %s", city, page_num, exc)
+                    break
 
-            try:
-                count = check_and_increment("rentcast", monthly_limit=RENTCAST_MONTHLY_LIMIT)
-                log.info("  Quota call #%d of %d this month", count, RENTCAST_MONTHLY_LIMIT)
-            except QuotaExceededError as exc:
-                log.error(str(exc))
-                quota_exhausted = True
-                break
+                if not page:
+                    log.info("Empty page — end of %s results.", city)
+                    break
 
-            try:
-                page = fetch_rentcast_page(offset, fetch_size, city=city)
-            except requests.HTTPError as exc:
-                log.error("RentCast API error on %s page %d: %s", city, page_num, exc)
-                break
-            except Exception as exc:
-                log.error("Unexpected error on %s page %d: %s", city, page_num, exc)
-                break
+                log.info("  Got %d listings on %s page %d", len(page), city, page_num)
+                all_listings.extend(page)
+                offset += len(page)
 
-            if not page:
-                log.info("Empty page — end of %s results.", city)
-                break
+                if len(page) < fetch_size:
+                    log.info("Last %s page (returned %d < %d) — stopping.", city, len(page), fetch_size)
+                    break
 
-            log.info("  Got %d listings on %s page %d", len(page), city, page_num)
-            all_listings.extend(page)
-            offset += len(page)
+                time.sleep(0.1)  # courtesy delay between pages
 
-            if len(page) < fetch_size:
-                log.info("Last %s page (returned %d < %d) — stopping.", city, len(page), fetch_size)
-                break
+            log.info("City %s done — %d listings total so far", city, len(all_listings))
 
-            time.sleep(0.1)  # courtesy delay between pages
+        log.info("Fetched %d total listings from RentCast across %d city sweep(s)", len(all_listings), len(city_list))
 
-        log.info("City %s done — %d listings total so far", city, len(all_listings))
-
-    log.info("Fetched %d total listings from RentCast across %d city sweep(s)", len(all_listings), len(city_list))
+        # Save to cache so a retry can skip the API fetch
+        if use_cache and all_listings:
+            _save_cache(city_list, all_listings)
 
     if not all_listings:
         log.info("Nothing to process.")
@@ -478,6 +536,7 @@ def ingest(
         log.info("Upserted %d/%d listings…", total_upserted, len(normalized))
 
     log.info("Done. Upserted %d listings to Supabase.", total_upserted)
+    _clear_cache()  # fetch succeeded — cache no longer needed
 
 
 # ---------------------------------------------------------------------------
@@ -511,6 +570,10 @@ def parse_args() -> argparse.Namespace:
             "Pass 'New York' to re-sweep Manhattan."
         ),
     )
+    parser.add_argument(
+        "--no-cache", action="store_true",
+        help="Ignore any existing fetch cache and always fetch fresh from RentCast.",
+    )
     return parser.parse_args()
 
 
@@ -522,4 +585,5 @@ if __name__ == "__main__":
         borough_filter=args.borough,
         skip_geocode=args.skip_geocode,
         cities=args.cities,
+        no_cache=args.no_cache,
     )
