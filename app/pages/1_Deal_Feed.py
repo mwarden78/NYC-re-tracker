@@ -1,4 +1,4 @@
-"""Deal Feed — filterable list of property cards (TES-9/TES-10/TES-29/TES-31/TES-46)."""
+"""Deal Feed — filterable list of property cards (TES-9/TES-10/TES-29/TES-31/TES-46/TES-124)."""
 
 from __future__ import annotations
 
@@ -119,6 +119,10 @@ with st.sidebar:
     }
     sort_sel = st.selectbox("Sort By", list(SORT_OPTIONS.keys()))
 
+    # In Rem filter
+    in_rem_only = st.checkbox("In Rem only", value=False,
+                              help="Show only properties in the city's active tax foreclosure pipeline (In Rem)")
+
     # Card density
     compact_mode = st.toggle("Compact cards", value=False)
 
@@ -174,6 +178,8 @@ for p in all_properties:
         if beds is None or int(beds) < min_beds_num:
             continue
     if hide_tracked and p["id"] in tracked:
+        continue
+    if in_rem_only and p.get("lien_cycle") != "In Rem":
         continue
     filtered.append(p)
 
@@ -304,6 +310,9 @@ def _render_card(prop: dict, viol_count: int = 0, last_sale: dict | None = None)
     days = _days_ago(prop.get("listed_at"))
     pipeline_status = tracked.get(prop_id)
 
+    lien_cycle = prop.get("lien_cycle")
+    is_in_rem = lien_cycle == "In Rem"
+
     with st.container(border=True):
         left, right = st.columns([2, 1])
         left.markdown(f"**{icon} {label}**")
@@ -313,6 +322,14 @@ def _render_card(prop: dict, viol_count: int = 0, last_sale: dict | None = None)
         )
 
         st.markdown(f"**{address}**")
+        if is_in_rem:
+            st.markdown(
+                "<span style='background:#dc2626;color:white;padding:2px 8px;"
+                "border-radius:4px;font-size:12px;font-weight:600'>IN REM FORECLOSURE</span>",
+                unsafe_allow_html=True,
+            )
+        elif lien_cycle:
+            st.caption(f"Lien: {lien_cycle}")
         if prop_type:
             st.caption(prop_type.title())
 
@@ -379,10 +396,13 @@ def _render_compact_card(prop: dict, viol_count: int = 0) -> None:
     price = prop.get("price")
     pipeline_status = tracked.get(prop_id)
 
+    is_in_rem = prop.get("lien_cycle") == "In Rem"
+
     with st.container(border=True):
         c1, c2, c3 = st.columns([3, 1, 1])
         with c1:
-            st.markdown(f"**{icon} {address}**")
+            rem_tag = " <span style='background:#dc2626;color:white;padding:1px 6px;border-radius:3px;font-size:11px'>IN REM</span>" if is_in_rem else ""
+            st.markdown(f"**{icon} {address}**{rem_tag}", unsafe_allow_html=True)
             st.caption(borough)
         with c2:
             st.markdown(f"**${price:,.0f}**" if price else "*N/A*")

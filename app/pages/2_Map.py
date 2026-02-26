@@ -1,4 +1,4 @@
-"""Map View — properties plotted on an interactive NYC map (TES-11, TES-22, TES-23, TES-24, TES-27, TES-46)."""
+"""Map View — properties plotted on an interactive NYC map (TES-11, TES-22, TES-23, TES-24, TES-27, TES-46, TES-124)."""
 
 from __future__ import annotations
 
@@ -393,6 +393,8 @@ for p in properties:
     idx = len(rows)
     prop_by_index[idx] = p
     walk = p.get("walk_score")
+    lien_cycle = p.get("lien_cycle") or ""
+    is_in_rem = lien_cycle == "In Rem"
     rows.append({
         "lat": float(lat),
         "lng": float(lng),
@@ -405,6 +407,8 @@ for p in properties:
         "color": DEAL_COLORS.get(deal_type, [100, 100, 100, 180]),
         "last_sale_fmt": _fmt_last_sale(last_sales.get(p["id"])),
         "walk_score_fmt": f"🚶 {walk}" if walk is not None else "",
+        "lien_cycle": lien_cycle,
+        "in_rem_fmt": "⚠️ IN REM FORECLOSURE" if is_in_rem else "",
     })
 
 if not rows:
@@ -579,7 +583,7 @@ else:
         auto_highlight=True,
     )
     tooltip = {
-        "html": "<b>{address}</b><br/>{deal_label} · {borough}<br/>Price: {price_fmt}<br/>Last sale: {last_sale_fmt}<br/>Pipeline: {pipeline_fmt}<br/>{walk_score_fmt}",
+        "html": "<b>{address}</b><br/>{deal_label} · {borough}<br/>Price: {price_fmt}<br/>Last sale: {last_sale_fmt}<br/>Pipeline: {pipeline_fmt}<br/>{walk_score_fmt}<br/>{in_rem_fmt}",
         "style": {"backgroundColor": "#1e293b", "color": "white",
                   "fontSize": "13px", "padding": "8px", "borderRadius": "4px"},
     }
@@ -629,6 +633,13 @@ if selected_prop:
             label = DEAL_LABELS.get(deal_type, deal_type)
             st.markdown(f"### {selected_prop.get('address', '')}")
             st.caption(f"{icon} {label} · {selected_prop.get('borough', '')}")
+
+            if selected_prop.get("lien_cycle") == "In Rem":
+                st.markdown(
+                    "<span style='background:#dc2626;color:white;padding:2px 8px;"
+                    "border-radius:4px;font-size:12px;font-weight:600'>IN REM FORECLOSURE</span>",
+                    unsafe_allow_html=True,
+                )
 
             m1, m2, m3 = st.columns(3)
             m1.metric("Price", f"${price:,.0f}" if price else "—")

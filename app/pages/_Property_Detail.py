@@ -1,4 +1,4 @@
-"""Property Detail page — TES-19, TES-45, TES-89.
+"""Property Detail page — TES-19, TES-45, TES-89, TES-124.
 
 Navigated to via query param: ?property_id=<UUID>
 """
@@ -116,6 +116,24 @@ with badge_col:
     st.markdown(f"**{icon} {deal_label}**")
     if pipeline_status:
         st.markdown(f"**{PIPELINE_LABELS.get(pipeline_status, pipeline_status)}**")
+
+# ---------------------------------------------------------------------------
+# In Rem Foreclosure banner (TES-124)
+# ---------------------------------------------------------------------------
+lien_cycle = prop.get("lien_cycle")
+if lien_cycle == "In Rem":
+    st.error(
+        "**IN REM FORECLOSURE** — The City of New York is actively foreclosing on this "
+        "property for unpaid taxes. In Rem proceedings transfer ownership to the city, "
+        "which may then auction or dispose of the property. This represents a high-signal "
+        "distressed acquisition opportunity. Contact your attorney about purchasing tax liens "
+        "or acquiring the property at city auction."
+    )
+elif lien_cycle:
+    st.warning(
+        f"**Lien Cycle: {lien_cycle}** — This property has received a tax lien notice. "
+        "If unpaid, it may progress to In Rem foreclosure."
+    )
 
 # ---------------------------------------------------------------------------
 # Key metrics row
