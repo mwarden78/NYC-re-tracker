@@ -28,9 +28,9 @@ with st.sidebar:
 
     price_min, price_max = st.slider(
         "Price range",
-        min_value=100_000,
+        min_value=50_000,
         max_value=10_000_000,
-        value=(100_000, 5_000_000),
+        value=(50_000, 5_000_000),
         step=50_000,
         format="$%d",
     )
