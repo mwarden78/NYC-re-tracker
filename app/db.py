@@ -173,6 +173,20 @@ def load_violations_by_property(property_id: str) -> list[dict]:
 
 
 @st.cache_data(ttl=_TTL)
+def load_complaints_311(property_id: str) -> list[dict]:
+    """Return 311 complaints for a property, ordered by created_date DESC."""
+    client = get_client()
+    result = (
+        client.table("complaints_311")
+        .select("*")
+        .eq("property_id", property_id)
+        .order("created_date", desc=True)
+        .execute()
+    )
+    return result.data or []
+
+
+@st.cache_data(ttl=_TTL)
 def load_lien_history_by_property(property_id: str) -> list[dict]:
     """Return prior lien history for a single property, newest notice first."""
     client = get_client()
