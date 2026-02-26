@@ -110,9 +110,12 @@ with st.sidebar:
 
     # Sort
     SORT_OPTIONS = {
-        "Newest first": ("listed_at", True),
-        "Price: low to high": ("price", False),
-        "Price: high to low": ("price", True),
+        "Newest first":               ("listed_at",    True),
+        "Price: low → high":          ("price",         False),
+        "Price: high → low":          ("price",         True),
+        "Tax Arrears: highest first": ("tax_arrears",   True),
+        "Violations: most first":     ("_viol",         True),
+        "Price/sqft: low → high":     ("_price_sqft",   False),
     }
     sort_sel = st.selectbox("Sort By", list(SORT_OPTIONS.keys()))
 
@@ -176,7 +179,14 @@ sort_key, sort_desc = SORT_OPTIONS[sort_sel]
 
 
 def _sort_val(p: dict):
-    v = p.get(sort_key)
+    if sort_key == "_viol":
+        v = violation_counts.get(p["id"], 0)
+    elif sort_key == "_price_sqft":
+        price = p.get("price")
+        sqft = p.get("sqft")
+        v = (price / sqft) if price and sqft else None
+    else:
+        v = p.get(sort_key)
     if v is None:
         return (1, 0)  # push nulls to end
     return (0, v)
