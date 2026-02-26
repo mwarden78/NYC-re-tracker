@@ -274,7 +274,13 @@ def run(property_id: Optional[str], limit: Optional[int], dry_run: bool) -> None
         borough = prop.get("borough", "")
         log.info("  [%d/%d] %s, %s", i + 1, len(properties), address, borough)
 
-        records = fetch_hpd_registrations(pid, address, borough)
+        try:
+            records = fetch_hpd_registrations(pid, address, borough)
+        except Exception as exc:
+            log.warning("    ERROR fetching HPD registration, skipping: %s", exc)
+            skipped += 1
+            continue
+
         if records:
             log.info("    Found %d registration(s)", len(records))
             for r in records:

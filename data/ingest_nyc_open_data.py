@@ -192,19 +192,31 @@ def _soda_headers() -> dict[str, str]:
 
 def soda_get(dataset_id: str, params: dict, _retries: int = 3) -> list[dict]:
     """Fetch one page of results from a Socrata dataset, retrying on transient errors."""
+    import logging as _log
+    _logger = _log.getLogger(__name__)
     url = f"{SODA_BASE}/{dataset_id}.json"
     for attempt in range(1, _retries + 1):
         try:
             resp = requests.get(url, params=params, headers=_soda_headers(), timeout=REQUEST_TIMEOUT)
+            # Retry on 5xx server errors (transient); raise immediately on 4xx client errors
+            if resp.status_code >= 500:
+                if attempt == _retries:
+                    resp.raise_for_status()
+                wait = 2 ** attempt  # 2s, 4s
+                _logger.warning(
+                    "Socrata %d server error (attempt %d/%d), retrying in %ds",
+                    resp.status_code, attempt, _retries, wait,
+                )
+                time.sleep(wait)
+                continue
             resp.raise_for_status()
             return resp.json()
         except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
             if attempt == _retries:
                 raise
             wait = 2 ** attempt  # 2s, 4s
-            import logging as _log
-            _log.getLogger(__name__).warning(
-                "Socrata request timed out (attempt %d/%d), retrying in %ds: %s",
+            _logger.warning(
+                "Socrata request failed (attempt %d/%d), retrying in %ds: %s",
                 attempt, _retries, wait, exc,
             )
             time.sleep(wait)
