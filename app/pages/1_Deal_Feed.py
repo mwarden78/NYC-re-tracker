@@ -119,6 +119,9 @@ with st.sidebar:
     }
     sort_sel = st.selectbox("Sort By", list(SORT_OPTIONS.keys()))
 
+    # Card density
+    compact_mode = st.toggle("Compact cards", value=False)
+
     # Hide tracked
     hide_tracked = st.checkbox("Hide tracked properties", value=False)
 
@@ -366,6 +369,38 @@ def _render_card(prop: dict, viol_count: int = 0, last_sale: dict | None = None)
             st.switch_page("pages/_Property_Detail.py")
 
 
+def _render_compact_card(prop: dict, viol_count: int = 0) -> None:
+    """Render a minimal one-line-ish property card for compact mode."""
+    prop_id = prop["id"]
+    deal_type = prop.get("deal_type", "")
+    icon = DEAL_ICONS.get(deal_type, "⚪")
+    address = prop.get("address", "Unknown")
+    borough = prop.get("borough", "")
+    price = prop.get("price")
+    pipeline_status = tracked.get(prop_id)
+
+    with st.container(border=True):
+        c1, c2, c3 = st.columns([3, 1, 1])
+        with c1:
+            st.markdown(f"**{icon} {address}**")
+            st.caption(borough)
+        with c2:
+            st.markdown(f"**${price:,.0f}**" if price else "*N/A*")
+        with c3:
+            if pipeline_status:
+                st.caption(PIPELINE_LABELS.get(pipeline_status, pipeline_status))
+            else:
+                if st.button("+ Watch", key=f"cwatch_{prop_id}"):
+                    try:
+                        add_to_pipeline(prop_id, "watching")
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(str(exc))
+            if st.button("→", key=f"cdetail_{prop_id}", help="View Details"):
+                st.query_params["property_id"] = prop_id
+                st.switch_page("pages/_Property_Detail.py")
+
+
 # ---------------------------------------------------------------------------
 # CSV export helper
 # ---------------------------------------------------------------------------
@@ -442,7 +477,11 @@ else:
         use_container_width=True,
     )
 
-    cols = st.columns(3)
-    for i, prop in enumerate(filtered):
-        with cols[i % 3]:
-            _render_card(prop, viol_count=violation_counts.get(prop["id"], 0), last_sale=last_sales.get(prop["id"]))
+    if compact_mode:
+        for prop in filtered:
+            _render_compact_card(prop, viol_count=violation_counts.get(prop["id"], 0))
+    else:
+        cols = st.columns(3)
+        for i, prop in enumerate(filtered):
+            with cols[i % 3]:
+                _render_card(prop, viol_count=violation_counts.get(prop["id"], 0), last_sale=last_sales.get(prop["id"]))
