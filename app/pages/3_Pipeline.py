@@ -1,8 +1,9 @@
-"""Pipeline — track deals through the investment workflow (TES-12, TES-92)."""
+"""Pipeline — track deals through the investment workflow (TES-12, TES-92, TES-93)."""
 
 from __future__ import annotations
 
 import statistics
+from datetime import datetime, timezone
 
 import streamlit as st
 from db import load_deals, load_violation_counts, update_deal_status
@@ -39,13 +40,33 @@ def _format_price(price) -> str:
     return f"${price:,.0f}"
 
 
+def _deal_age(created_at: str | None) -> str | None:
+    """Return a human-readable deal age like '3d', '2w', '1mo' from created_at."""
+    if not created_at:
+        return None
+    try:
+        dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+        days = (datetime.now(timezone.utc) - dt).days
+        if days < 1:
+            return "today"
+        if days < 7:
+            return f"{days}d"
+        if days < 30:
+            return f"{days // 7}w"
+        return f"{days // 30}mo"
+    except Exception:
+        return None
+
+
 def _render_deal_card(deal: dict) -> None:
     prop = deal.get("properties") or {}
 
     st.markdown(f"**{prop.get('address', 'Unknown address')}**")
     borough = prop.get("borough", "")
     deal_type = (prop.get("deal_type") or "").replace("_", " ").title()
-    st.caption(f"{borough} · {deal_type}")
+    age = _deal_age(deal.get("created_at"))
+    age_suffix = f" · {age}" if age else ""
+    st.caption(f"{borough} · {deal_type}{age_suffix}")
 
     col1, col2 = st.columns(2)
     with col1:
