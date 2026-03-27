@@ -43,6 +43,7 @@ if not saved_searches:
 # ---------------------------------------------------------------------------
 DEAL_LABELS = {
     "foreclosure": "Foreclosure",
+    "pre_foreclosure": "Pre-Foreclosure",
     "tax_lien": "Tax Lien",
     "listing": "Listing",
     "off_market": "Off Market",

@@ -88,6 +88,7 @@ with st.sidebar:
     # Deal type — multiselect
     DEAL_TYPE_OPTIONS = {
         "Foreclosure": "foreclosure",
+        "Pre-Foreclosure": "pre_foreclosure",
         "Tax Lien": "tax_lien",
         "Listing": "listing",
         "Off Market": "off_market",
@@ -232,18 +233,21 @@ filtered.sort(key=_sort_val, reverse=sort_desc)
 # ---------------------------------------------------------------------------
 DEAL_ICONS = {
     "foreclosure": "🔴",
+    "pre_foreclosure": "🟡",
     "tax_lien": "🟠",
     "listing": "🔵",
     "off_market": "🟣",
 }
 DEAL_LABELS = {
     "foreclosure": "Foreclosure",
+    "pre_foreclosure": "Pre-Foreclosure",
     "tax_lien": "Tax Lien",
     "listing": "Listing",
     "off_market": "Off Market",
 }
 DEAL_COLORS_HEX = {
     "foreclosure": "#dc2626",
+    "pre_foreclosure": "#eab308",
     "tax_lien": "#ea580c",
     "listing": "#2563eb",
     "off_market": "#7c3aed",

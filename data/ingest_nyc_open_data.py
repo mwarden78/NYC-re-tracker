@@ -1,12 +1,18 @@
-"""NYC Open Data ingestion script — TES-7, TES-33, TES-38, TES-42.
+"""NYC Open Data ingestion script — TES-7, TES-33, TES-38, TES-42, TES-123.
 
-Fetches foreclosure judgment and tax lien data from NYC Open Data
-(Socrata SODA API) and upserts into the Supabase `properties` table.
+Fetches foreclosure judgment, pre-foreclosure (lien of common charges),
+and tax lien data from NYC Open Data (Socrata SODA API) and upserts into
+the Supabase `properties` table.
 
 Data sources:
   Foreclosures — ACRIS Real Property Master (doc_type=JUDG)
     Master:  https://data.cityofnewyork.us/resource/bnx9-e6tj.json
     Legals:  https://data.cityofnewyork.us/resource/8h5j-fqxa.json  (addresses)
+  Pre-Foreclosures — ACRIS Real Property Master (doc_type=LOCC)   (TES-123)
+    Lien of Common Charges: filed when a condo/co-op board places a lien
+    against a unit owner for unpaid maintenance/assessments. This is an early
+    pre-foreclosure signal — unpaid liens often lead to foreclosure proceedings.
+    Uses the same ACRIS Master + Legals join as foreclosures.
   Tax Liens — DOF Tax Lien Sale Lists
     https://data.cityofnewyork.us/resource/9rz4-mjek.json
 
@@ -17,6 +23,7 @@ Usage:
   python data/ingest_nyc_open_data.py               # ingest all sources
   python data/ingest_nyc_open_data.py --dry-run     # preview without writing
   python data/ingest_nyc_open_data.py --source foreclosure
+  python data/ingest_nyc_open_data.py --source pre_foreclosure
   python data/ingest_nyc_open_data.py --source tax_lien
   python data/ingest_nyc_open_data.py --limit 50    # cap records per source
   python data/ingest_nyc_open_data.py --lookback 24 # months of history (default 13)
@@ -80,7 +87,7 @@ BOROUGH_MAP: dict[str, str] = {
 }
 
 # Deal type priority for cross-source merge (lower index = higher priority)
-DEAL_TYPE_PRIORITY = ["foreclosure", "tax_lien", "listing", "off_market"]
+DEAL_TYPE_PRIORITY = ["foreclosure", "pre_foreclosure", "tax_lien", "listing", "off_market"]
 
 # ACRIS borough code → single BBL digit (matches NYC's borough numbering)
 ACRIS_BOROUGH_DIGIT: dict[str, str] = {
@@ -451,6 +458,102 @@ def fetch_foreclosures(limit: Optional[int] = None, lookback_months: int = 13) -
 
 
 # ---------------------------------------------------------------------------
+# Pre-foreclosure ingestion (ACRIS — Lien of Common Charges)
+# ---------------------------------------------------------------------------
+
+def fetch_pre_foreclosures(limit: Optional[int] = None, lookback_months: int = 13) -> list[dict]:
+    """Fetch pre-foreclosure records from ACRIS (Lien of Common Charges).
+
+    LOCC documents are filed when a condo/co-op board places a lien against a
+    unit owner for unpaid maintenance or assessments. This is an early signal of
+    financial distress that often leads to foreclosure proceedings.
+
+    Uses the same ACRIS Master + Legals join as foreclosure judgments.
+    Note: ACRIS does not record lis pendens (notices of pendency) — those are
+    filed with the County Clerk and not available via NYC Open Data.
+    """
+    since = _lookback_date(lookback_months)
+    log.info("Fetching pre-foreclosure LOCC records since %s...", since)
+
+    master_rows = soda_get_all(
+        ACRIS_MASTER_ID,
+        where=f"doc_type='LOCC' AND recorded_datetime > '{since}'",
+        select="document_id,doc_type,document_date,document_amt,recorded_datetime",
+        limit=limit,
+    )
+    log.info("  got %d master LOCC records", len(master_rows))
+    if not master_rows:
+        return []
+
+    master_by_id: dict[str, dict] = {r["document_id"]: r for r in master_rows}
+    doc_ids = list(master_by_id.keys())
+
+    legals: list[dict] = []
+    chunk_size = 50
+    for i in range(0, len(doc_ids), chunk_size):
+        chunk = doc_ids[i : i + chunk_size]
+        ids_clause = ", ".join(f"'{d}'" for d in chunk)
+        chunk_legals = soda_get_all(
+            ACRIS_LEGALS_ID,
+            where=f"document_id in ({ids_clause})",
+            select="document_id,borough,block,lot,street_number,street_name,unit",
+        )
+        legals.extend(chunk_legals)
+        time.sleep(0.2)
+
+    log.info("  got %d legal records", len(legals))
+
+    properties: list[dict] = []
+    seen: set[str] = set()
+
+    for legal in legals:
+        doc_id = legal.get("document_id")
+        master = master_by_id.get(doc_id, {})
+
+        raw_borough = legal.get("borough", "")
+        borough = normalize_borough(raw_borough)
+        if not borough:
+            continue
+
+        street_num = (legal.get("street_number") or "").strip()
+        street_name = (legal.get("street_name") or "").strip()
+        if not street_num or not street_name:
+            continue
+
+        raw_address = f"{street_num} {street_name}"
+        unit = (legal.get("unit") or "").strip()
+        if unit:
+            raw_address += f" Apt {unit}"
+
+        address = normalize_address(raw_address)
+        dedup_key = f"{address}|{borough}"
+        if dedup_key in seen:
+            continue
+        seen.add(dedup_key)
+
+        price_raw = master.get("document_amt")
+        price = float(price_raw) if price_raw and float(price_raw) > 0 else None
+        listed_at = master.get("document_date") or master.get("recorded_datetime")
+
+        bbl = construct_bbl(raw_borough, legal.get("block", ""), legal.get("lot", ""))
+
+        properties.append({
+            "address": address,
+            "borough": borough,
+            "deal_type": "pre_foreclosure",
+            "price": price,
+            "source": "nyc_open_data",
+            "source_url": f"https://data.cityofnewyork.us/resource/{ACRIS_MASTER_ID}.json",
+            "listed_at": listed_at,
+            "bbl": bbl,
+            "_needs_geocode": True,
+        })
+
+    log.info("  mapped %d unique pre-foreclosure properties", len(properties))
+    return properties
+
+
+# ---------------------------------------------------------------------------
 # Tax lien ingestion (DOF Tax Lien Sale List)
 # ---------------------------------------------------------------------------
 
@@ -661,7 +764,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--source",
-        choices=["foreclosure", "tax_lien", "all"],
+        choices=["foreclosure", "pre_foreclosure", "tax_lien", "all"],
         default="all",
         help="Which data source to ingest (default: all)",
     )
@@ -699,6 +802,11 @@ def main() -> None:
     if args.source in ("foreclosure", "all"):
         all_properties.extend(
             fetch_foreclosures(limit=args.limit, lookback_months=args.lookback)
+        )
+
+    if args.source in ("pre_foreclosure", "all"):
+        all_properties.extend(
+            fetch_pre_foreclosures(limit=args.limit, lookback_months=args.lookback)
         )
 
     if args.source in ("tax_lien", "all"):
