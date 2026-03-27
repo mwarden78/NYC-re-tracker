@@ -1,16 +1,18 @@
-"""Feature engineering pipeline for AVM training data — TES-70.
+"""Feature engineering pipeline for AVM training data — TES-70, TES-105.
 
 Reads data/training/raw_features.parquet (produced by TES-69) and applies:
   1. Outlier / quality filtering
-  2. Derived numeric features
+  2. Derived numeric features (incl. per_unit_sqft — TES-105)
   3. Categorical encoding (bldgclass → single letter, zonedist1 → zone prefix)
      — encoders saved to data/models/label_encoders.pkl for reuse at inference
   4. Borough one-hot encoding
   5. Temporal train/test split (is_test column, no shuffling)
 
-Outputs:
-  data/training/features_engineered.parquet
-  data/models/label_encoders.pkl
+Outputs (TES-105 — dual outputs for Option C dual-model AVM):
+  data/training/features_engineered.parquet      — building-only (GFA > 0)
+  data/training/features_engineered_full.parquet — all rows incl. condos
+  data/models/label_encoders.pkl                 — building encoders (v1 compat)
+  data/models/label_encoders_full.pkl            — full encoders (for unit model)
 
 Usage:
   python data/engineer_features.py            # run full pipeline
@@ -43,8 +45,10 @@ log = logging.getLogger(__name__)
 DATA_DIR = Path(__file__).parent / "training"
 MODELS_DIR = Path(__file__).parent / "models"
 INPUT_PATH = DATA_DIR / "raw_features.parquet"
-OUTPUT_PATH = DATA_DIR / "features_engineered.parquet"
-ENCODERS_PATH = MODELS_DIR / "label_encoders.pkl"
+OUTPUT_PATH = DATA_DIR / "features_engineered.parquet"           # building-only (GFA > 0)
+OUTPUT_FULL_PATH = DATA_DIR / "features_engineered_full.parquet" # all rows incl. condos
+ENCODERS_PATH = MODELS_DIR / "label_encoders.pkl"                # building encoders
+ENCODERS_FULL_PATH = MODELS_DIR / "label_encoders_full.pkl"      # full encoders (unit model)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -59,8 +63,12 @@ TEST_CUTOFF = pd.Timestamp("2023-01-01")
 # Pipeline steps
 # ---------------------------------------------------------------------------
 
-def filter_outliers(df: pd.DataFrame) -> pd.DataFrame:
-    """Remove non-arms-length, bulk-transfer, and data-quality outliers."""
+def filter_quality(df: pd.DataFrame) -> pd.DataFrame:
+    """Price bounds + PLUTO-match filter. Retains all property types (incl. condos).
+
+    Called by both filter_outliers (building dataset) and directly for the
+    full dataset used by the unit-level AVM (TES-105 / Option C).
+    """
     n0 = len(df)
 
     # Price bounds (raw_features already filters < 10k, but re-apply for safety)
@@ -70,20 +78,28 @@ def filter_outliers(df: pd.DataFrame) -> pd.DataFrame:
              f"{len(df):,}", f"{n0 - len(df):,}")
     n1 = len(df)
 
-    # Both DOF gross_square_feet and PLUTO bldgarea must be non-zero
-    mask = (df["gross_square_feet"].fillna(0) > 0) & (df["bldgarea"].fillna(0) > 0)
-    df = df[mask]
-    log.info("  After GFA > 0 filter:        %s rows (-%s)",
-             f"{len(df):,}", f"{n1 - len(df):,}")
-    n2 = len(df)
-
     # Require PLUTO match (lat/lon present — no PLUTO → can't derive spatial features)
     df = df.dropna(subset=["latitude", "longitude"])
     log.info("  After PLUTO match filter:    %s rows (-%s)",
-             f"{len(df):,}", f"{n2 - len(df):,}")
+             f"{len(df):,}", f"{n1 - len(df):,}")
 
     log.info("  Total filtered: -%s rows (%s kept)",
              f"{n0 - len(df):,}", f"{len(df):,}")
+    return df
+
+
+def filter_outliers(df: pd.DataFrame) -> pd.DataFrame:
+    """Quality filter + GFA > 0 guard. Building-only dataset (v1 / building model)."""
+    df = filter_quality(df)
+    n_pre = len(df)
+
+    # Both DOF gross_square_feet and PLUTO bldgarea must be non-zero.
+    # NOTE: condo/co-op unit sales have gross_square_feet=0 in NYC DOF data —
+    # this filter intentionally excludes them for the building-level model.
+    mask = (df["gross_square_feet"].fillna(0) > 0) & (df["bldgarea"].fillna(0) > 0)
+    df = df[mask]
+    log.info("  After GFA > 0 filter:        %s rows (-%s)",
+             f"{len(df):,}", f"{n_pre - len(df):,}")
     return df
 
 
@@ -112,6 +128,13 @@ def derive_features(df: pd.DataFrame) -> pd.DataFrame:
         (df["sale_com_units"].fillna(0) > 0) &
         (df["sale_res_units"].fillna(0) > 0)
     ).astype(int)
+
+    # Per-unit sqft: PLUTO building area / residential units (TES-105).
+    # For whole-building sales: average unit size in the building.
+    # For condo/co-op unit sales (gross_square_feet=0): same formula gives
+    # the building average, used as a training proxy for the unit-level model.
+    safe_units = df["pluto_unitsres"].replace(0, np.nan).fillna(1.0)
+    df["per_unit_sqft"] = (df["bldgarea"] / safe_units).clip(lower=0, upper=50_000).fillna(0)
 
     return df
 
@@ -194,6 +217,16 @@ def add_split(df: pd.DataFrame) -> pd.DataFrame:
 # Orchestration
 # ---------------------------------------------------------------------------
 
+def _log_feature_stats(df: pd.DataFrame) -> None:
+    log.info("Derived feature stats:")
+    for col in ["price_per_sqft", "building_age_at_sale", "per_unit_sqft",
+                "far_utilized_pct", "far_remaining", "is_mixed_use"]:
+        if col in df.columns:
+            s = df[col].dropna()
+            log.info("  %-25s  mean=%8.2f  median=%8.2f  null=%d",
+                     col, s.mean(), s.median(), df[col].isna().sum())
+
+
 def engineer(dry_run: bool = False) -> None:
     if not INPUT_PATH.exists():
         log.error("Missing input file: %s", INPUT_PATH)
@@ -201,50 +234,82 @@ def engineer(dry_run: bool = False) -> None:
         sys.exit(1)
 
     log.info("Loading %s …", INPUT_PATH)
-    df = pd.read_parquet(INPUT_PATH)
-    log.info("  %s rows, %d columns", f"{len(df):,}", len(df.columns))
+    df_raw = pd.read_parquet(INPUT_PATH)
+    log.info("  %s rows, %d columns", f"{len(df_raw):,}", len(df_raw.columns))
 
-    log.info("Step 1: Filtering outliers …")
-    df = filter_outliers(df)
+    # -----------------------------------------------------------------------
+    # FULL DATASET (all property types — includes condos/co-ops for unit AVM)
+    # -----------------------------------------------------------------------
+    log.info("=== Full dataset (all property types) ===")
+    log.info("Step 1a: Quality filter (price + PLUTO match, no GFA guard) …")
+    df_full = filter_quality(df_raw.copy())
 
     log.info("Step 2: Deriving features …")
-    df = derive_features(df)
+    df_full = derive_features(df_full)
 
-    log.info("Step 3: Encoding categoricals …")
-    df, encoders = encode_categoricals(df)
+    log.info("Step 3a: Encoding categoricals (full) …")
+    df_full, encoders_full = encode_categoricals(df_full)
 
     log.info("Step 4: One-hot encoding borough …")
-    df = one_hot_borough(df)
+    df_full = one_hot_borough(df_full)
 
     log.info("Step 5: Adding train/test split …")
-    df = add_split(df)
+    df_full = add_split(df_full)
 
-    log.info("Final dataset: %s rows, %d columns", f"{len(df):,}", len(df.columns))
+    log.info("Full dataset: %s rows, %d columns", f"{len(df_full):,}", len(df_full.columns))
+    unit_rows = (df_full["gross_square_feet"].fillna(0) == 0).sum()
+    bldg_rows = (df_full["gross_square_feet"].fillna(0) > 0).sum()
+    log.info("  Unit sales (GFA=0, condos/co-ops): %s", f"{unit_rows:,}")
+    log.info("  Building sales (GFA>0):             %s", f"{bldg_rows:,}")
+    _log_feature_stats(df_full)
 
-    # Derived-feature summary
-    log.info("Derived feature stats:")
-    for col in ["price_per_sqft", "building_age_at_sale",
-                "far_utilized_pct", "far_remaining", "is_mixed_use"]:
-        if col in df.columns:
-            s = df[col].dropna()
-            log.info("  %-25s  mean=%8.2f  median=%8.2f  null=%d",
-                     col, s.mean(), s.median(), df[col].isna().sum())
+    # -----------------------------------------------------------------------
+    # BUILDING-ONLY DATASET (GFA > 0 — backward compatible with v1 / building AVM)
+    # -----------------------------------------------------------------------
+    log.info("=== Building-only dataset (GFA > 0) ===")
+    log.info("Step 1b: Outlier filter (price + PLUTO match + GFA > 0) …")
+    df_building = filter_outliers(df_raw.copy())
+
+    log.info("Step 2: Deriving features …")
+    df_building = derive_features(df_building)
+
+    log.info("Step 3b: Encoding categoricals (building) …")
+    df_building, encoders_building = encode_categoricals(df_building)
+
+    log.info("Step 4: One-hot encoding borough …")
+    df_building = one_hot_borough(df_building)
+
+    log.info("Step 5: Adding train/test split …")
+    df_building = add_split(df_building)
+
+    log.info("Building dataset: %s rows, %d columns",
+             f"{len(df_building):,}", len(df_building.columns))
+    _log_feature_stats(df_building)
 
     if dry_run:
         log.info("Dry run — no files written.")
         return
 
-    # Write engineered features Parquet
-    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(OUTPUT_PATH, index=False)
-    size_mb = OUTPUT_PATH.stat().st_size / 1_048_576
-    log.info("Wrote %s rows → %s (%.1f MB)", f"{len(df):,}", OUTPUT_PATH, size_mb)
-
-    # Save label encoders
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    # Write full dataset (for unit-level AVM training)
+    df_full.to_parquet(OUTPUT_FULL_PATH, index=False)
+    log.info("Wrote %s rows → %s (%.1f MB)",
+             f"{len(df_full):,}", OUTPUT_FULL_PATH,
+             OUTPUT_FULL_PATH.stat().st_size / 1_048_576)
+    with open(ENCODERS_FULL_PATH, "wb") as fh:
+        pickle.dump(encoders_full, fh)
+    log.info("Saved full label encoders → %s", ENCODERS_FULL_PATH)
+
+    # Write building dataset (backward compat — used by train_avm.py / building model)
+    df_building.to_parquet(OUTPUT_PATH, index=False)
+    log.info("Wrote %s rows → %s (%.1f MB)",
+             f"{len(df_building):,}", OUTPUT_PATH,
+             OUTPUT_PATH.stat().st_size / 1_048_576)
     with open(ENCODERS_PATH, "wb") as fh:
-        pickle.dump(encoders, fh)
-    log.info("Saved label encoders → %s", ENCODERS_PATH)
+        pickle.dump(encoders_building, fh)
+    log.info("Saved building label encoders → %s", ENCODERS_PATH)
 
     log.info("Done.")
 
