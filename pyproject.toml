@@ -32,7 +32,7 @@ dev = [
 ]
 # Optional: Better TOML parsing for fly.toml (falls back to simple parsing if not installed)
 fly = [
-    "tomli>=2.0.0",
+    "tomli>=2.4.1",
 ]
 
 [project.scripts]
